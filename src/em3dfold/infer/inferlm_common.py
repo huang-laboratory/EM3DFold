@@ -1,5 +1,6 @@
 import argparse
 import importlib
+import json
 import os
 import shutil
 import sys
@@ -282,6 +283,70 @@ def _extend_merged_chain_lists(
     chains_res_type.extend(part_res_type)
     chains_res_idx.extend(part_res_idx)
     chains_bfactor.extend(part_bfactor)
+
+
+def _resolve_chain_hmm_profile_dir():
+    value = os.environ.get("EM3DFOLD_CHAIN_HMM_PROFILE_DIR", "")
+    if str(value).strip() == "":
+        return None
+    return abspath(value)
+
+
+def _resolve_selected_profile_source_dir(profile_root_dir, source_path):
+    if profile_root_dir is None or source_path is None:
+        return None
+    source_path = abspath(source_path)
+    recycle_dir = os.path.basename(os.path.dirname(source_path))
+    if recycle_dir == "":
+        return None
+    candidate = os.path.join(profile_root_dir, recycle_dir, "after_prune")
+    if os.path.isdir(candidate):
+        return candidate
+    return None
+
+
+def _write_final_chain_hmm_profiles(profile_root_dir, protein_path=None, na_path=None):
+    if profile_root_dir is None:
+        return None
+
+    final_dir = os.path.join(profile_root_dir, 'after_prune')
+    if os.path.isdir(final_dir):
+        shutil.rmtree(final_dir)
+    os.makedirs(final_dir, exist_ok=True)
+
+    merged_summary = []
+    copied_any = False
+    for source_path, prefix in ((protein_path, 'protein_chain_'), (na_path, 'na_chain_')):
+        source_dir = _resolve_selected_profile_source_dir(profile_root_dir, source_path)
+        if source_dir is None:
+            continue
+        summary_path = os.path.join(source_dir, 'profiles.json')
+        summary = []
+        if os.path.isfile(summary_path):
+            with open(summary_path, 'r') as handle:
+                summary = json.load(handle)
+        for entry in summary:
+            filename = os.path.basename(entry.get('path', ''))
+            if not filename.startswith(prefix):
+                continue
+            src_file = os.path.join(source_dir, filename)
+            if not os.path.isfile(src_file):
+                continue
+            dst_file = os.path.join(final_dir, filename)
+            shutil.copy(src_file, dst_file)
+            copied_any = True
+            new_entry = dict(entry)
+            new_entry['path'] = dst_file
+            merged_summary.append(new_entry)
+
+    if not copied_any:
+        shutil.rmtree(final_dir)
+        return None
+
+    summary_path = os.path.join(final_dir, 'profiles.json')
+    with open(summary_path, 'w') as handle:
+        json.dump(merged_summary, handle, indent=2)
+    return final_dir
 
 
 def _write_merged_best_so_far_output(output_path, protein_path=None, na_path=None):
@@ -750,6 +815,14 @@ def run_main(args, model_class, model_args, run_inference_fn):
             )
         if last_na_after_prune_path is not None:
             print(f"# Final NA source = {last_na_after_prune_path}")
+
+    final_profile_dir = _write_final_chain_hmm_profiles(
+        _resolve_chain_hmm_profile_dir(),
+        protein_path=selected_protein_path,
+        na_path=last_na_after_prune_path,
+    )
+    if final_profile_dir is not None:
+        print(f"# Final chain HMM profiles written to {final_profile_dir}")
 
     final_entropy_output_path = os.path.join(output_dir, "output_entropy_score.cif")
     merged_entropy_output_path = _write_merged_best_so_far_output(

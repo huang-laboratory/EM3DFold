@@ -2693,15 +2693,7 @@ def final_results_align_to_sequence(
 
     profile_root_dir = _resolve_chain_hmm_profile_dir()
     if profile_root_dir is not None:
-        _dump_chain_hmm_profiles(
-            profile_root_dir,
-            reordered_final_results,
-            prot_before_chains,
-            prot_before_chain_types,
-            na_before_chains,
-            na_before_chain_types,
-            profile_set_name="before_prune",
-        )
+        profile_root_dir = os.path.join(profile_root_dir, os.path.basename(out_dir))
         _dump_chain_hmm_profiles(
             profile_root_dir,
             reordered_final_results,
