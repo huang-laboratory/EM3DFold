@@ -1,6 +1,9 @@
 # EM3DFold
 
 <div align="center">
+<!--
+<img src="assets/logo.png" alt="EM3DFold: AI-driven Atomic Structure Modeling from Cryo-EM Maps" width="600" />
+-->
 <img src="assets/logo.png" alt="EM3DFold: AI-driven Atomic Structure Modeling from Cryo-EM Maps" width="600" />
 </div>
 
