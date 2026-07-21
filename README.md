@@ -154,7 +154,7 @@ wget https://www.rcsb.org/fasta/entry/9UO1 -O 9UO1.fa
 wget https://files.wwpdb.org/pub/emdb/structures/EMD-64369/map/emd_64369.map.gz -O emd_64369.map.gz
 gunzip emd_64369.map.gz
 ```
-bash```
+```bash
 # run EM3DFold
 em3dfold build --map emd_64369.map --protein 9UO1.fa -o 9UO1
 ```
@@ -188,7 +188,7 @@ wget https://www.rcsb.org/fasta/entry/8T5O -O 8T5O.fa
 wget https://files.wwpdb.org/pub/emdb/structures/EMD-41354/map/emd_41354.map.gz -O emd_41354.map.gz
 gunzip emd_41354.map.gz
 ```
-bash```
+```bash
 # run EM3DFold
 em3dfold build --map emd_41354.map --rna 8T5O.fa -o 8T5O
 ```
@@ -226,7 +226,7 @@ wget https://www.rcsb.org/fasta/entry/8Y9N -O 8Y9N.fa
 wget https://files.wwpdb.org/pub/emdb/structures/EMD-39084/map/emd_39084.map.gz -O emd_39084.map.gz
 gunzip emd_39084.map.gz
 ```
-bash```
+```bash
 # run EM3DFold
 em3dfold build --map emd_39084.map --protein 8Y9N_prot.fa --rna 8Y9N_rna.fa --dna 8Y9N_dna.fa -o 8Y9N
 ```
