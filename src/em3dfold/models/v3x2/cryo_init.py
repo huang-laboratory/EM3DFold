@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
-from em3dfold.models.v2.bde import BackboneDistanceEmbedding
+from em3dfold.models.v3x2.bde import BackboneDistanceEmbedding
 from em3dfold.scunet.scunet import ConvTransBlock
 from em3dfold.utils.affine_utils import (
     sample_centered_cube_rot_matrix,

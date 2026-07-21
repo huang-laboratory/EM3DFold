@@ -10,8 +10,8 @@ from omegaconf import OmegaConf
 def add_args(parser):
     parser.add_argument(
         "--config",
-        default="em3dfold/infer/config/model_v2.yaml",
-        help="Path to v2 model config yaml",
+        default="em3dfold/infer/config/model_v3x2_12l_256_128_h8.yaml",
+        help="Path to model config yaml",
     )
     parser.add_argument("--device", default="cpu", help="cpu or cuda:0")
     parser.add_argument("--n-res", type=int, default=128, help="Number of residues")

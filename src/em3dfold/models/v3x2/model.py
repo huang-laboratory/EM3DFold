@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
-from em3dfold.models.v2.model_refresh import rbf
-from em3dfold.models.v3x.model import Model as V3XModel
+from em3dfold.models.v3x2.track import rbf
+from em3dfold.models.v3x2.model_scunet import Model as V3XModel
 from em3dfold.polymer_utils import polymer
 from em3dfold.polymer_utils import residue_constants as rc
 

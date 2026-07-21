@@ -906,7 +906,7 @@ def main(args):
     os.environ["EM3DFOLD_KEEP_HMM_FILES"] = "1" if bool(getattr(args, "keep_hmm_files", True)) else "0"
     script_dir = os.path.dirname(__file__)
     inferlm_cpx_model_config = _resolve_optional_file_path(args.cpx_model_config) or pjoin(
-        script_dir, "infer", "config", "model_v3x.yaml"
+        script_dir, "infer", "config", "model_v3x2_12l_256_128_h8.yaml"
     )
     inferlm_split_model_config = pjoin(
         script_dir, "infer", "config", "model_v3x2_12l_256_128_h8.yaml"

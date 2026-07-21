@@ -6,9 +6,9 @@ import torch.utils.checkpoint as checkpoint
 import time
 import einops
 
-from em3dfold.models.v2.attention import NodeUpdate, EdgeUpdate, OutProductMean, Transition
-from em3dfold.models.v2.ipa import InvariantPointAttention, IPATransition
-from em3dfold.models.v2.backbone_update import BackboneUpdate
+from em3dfold.models.v3x2.attention import NodeUpdate, EdgeUpdate, OutProductMean, Transition
+from em3dfold.models.v3x2.ipa import InvariantPointAttention, IPATransition
+from em3dfold.models.v3x2.backbone_update import BackboneUpdate
 
 def rbf(d, d_count=64, d_min=0.5, d_max=30.5):
     device = d.device

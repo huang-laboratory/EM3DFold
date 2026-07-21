@@ -5,9 +5,9 @@ import torch.nn as nn
 from typing import List
 import contextlib
 
-from em3dfold.models.v2.cryo_init import CryoInit
-from em3dfold.models.v2.track_refresh import TrackBlock, rbf
-from em3dfold.models.v2.sequence_attention import SequenceAttention
+from em3dfold.models.v3x2.cryo_init_base import CryoInit
+from em3dfold.models.v3x2.track import TrackBlock, rbf
+from em3dfold.models.v3x2.sequence_attention_base import SequenceAttention
 from em3dfold.models.mol import MolTypeEmbedder
 from em3dfold.polymer_utils import polymer
 from em3dfold.polymer_utils import residue_constants as rc

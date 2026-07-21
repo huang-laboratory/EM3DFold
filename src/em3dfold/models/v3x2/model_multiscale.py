@@ -3,12 +3,33 @@ import contextlib
 import torch
 import torch.nn as nn
 
-from em3dfold.models.v3x3uni.sequence_attention_uni import SequenceAttentionUni
-from em3dfold.models.v3x4.model import Model as V3X4Model
-from em3dfold.models.v2.model_refresh import Output
+from em3dfold.models.v3x2.model_base import Model as V2Model
+from em3dfold.models.v3x2.model_base import Output
+from em3dfold.models.v3x2.cryo_init_multiscale import CryoInit
+from em3dfold.models.v3x2.sequence_attention import SequenceAttention
 
 
-class Model(V3X4Model):
+class FusedEdgeAAPredictor(nn.Module):
+    def __init__(self, d_edge: int = 256, n_classes: int = 24):
+        super().__init__()
+        self.n_classes = n_classes
+        self.linear1 = nn.Linear(d_edge, d_edge)
+        self.linear2 = nn.Linear(d_edge, d_edge)
+        self.head = nn.Sequential(
+            nn.Linear(d_edge, d_edge),
+            nn.ReLU(),
+            nn.Linear(d_edge, d_edge),
+            nn.ReLU(),
+            nn.Linear(d_edge, n_classes * n_classes),
+        )
+
+    def forward(self, edge_density, edge):
+        x = self.linear1(edge_density) + self.linear2(edge)
+        x = self.head(x)
+        return x.view(*x.shape[:-1], self.n_classes, self.n_classes)
+
+
+class Model(V2Model):
     def __init__(
         self,
         d_node=256,
@@ -19,15 +40,13 @@ class Model(V3X4Model):
         n_qk_point=4,
         n_v_point=8,
         n_head=8,
-        n_block=12,
+        n_block=16,
         k=32,
         p_drop=0.10,
         c_grid=1,
         pred_node_exist=False,
         pred_edge_exist=True,
         pred_pairing=False,
-        pred_ss=True,
-        pred_na_type=False,
         use_checkpoint=False,
         use_seq_attn=True,
         seq_attn_every=2,
@@ -36,13 +55,6 @@ class Model(V3X4Model):
         d_cryo_emb=None,
         cube_size=23,
         rectangle_length=15,
-        cube_scunet_head_dim=16,
-        cube_scunet_window_size=3,
-        cube_scunet_drop_path=0.0,
-        cube_scunet_trans_ratio=0.25,
-        cube_scunet_max_trans_dim=128,
-        edge_bias_rbf_bins=24,
-        rotation_stop_gradient=False,
     ):
         super().__init__(
             d_node=d_node,
@@ -60,29 +72,30 @@ class Model(V3X4Model):
             pred_node_exist=pred_node_exist,
             pred_edge_exist=pred_edge_exist,
             pred_pairing=pred_pairing,
-            pred_ss=pred_ss,
-            pred_na_type=pred_na_type,
             use_checkpoint=use_checkpoint,
             use_seq_attn=use_seq_attn,
             seq_attn_every=seq_attn_every,
             geometry_update_every=geometry_update_every,
             recycle_use_full_structure=recycle_use_full_structure,
+        )
+
+        self.num_res_types = 24
+
+        self.init = CryoInit(
+            d_node=d_node,
+            d_edge=d_edge,
             d_cryo_emb=d_node if d_cryo_emb is None else d_cryo_emb,
+            c_grid=c_grid,
             cube_size=cube_size,
             rectangle_length=rectangle_length,
-            cube_scunet_head_dim=cube_scunet_head_dim,
-            cube_scunet_window_size=cube_scunet_window_size,
-            cube_scunet_drop_path=cube_scunet_drop_path,
-            cube_scunet_trans_ratio=cube_scunet_trans_ratio,
-            cube_scunet_max_trans_dim=cube_scunet_max_trans_dim,
-            edge_bias_rbf_bins=edge_bias_rbf_bins,
+            k=k,
+            checkpoint=use_checkpoint,
         )
-        self.rotation_stop_gradient = rotation_stop_gradient
 
         if self.use_seq_attn:
             self.seq_attn_blocks = nn.ModuleList(
                 [
-                    SequenceAttentionUni(
+                    SequenceAttention(
                         d=d_node,
                         d_seq=d_seq,
                         d_seq_na=self.d_seq_na,
@@ -94,29 +107,76 @@ class Model(V3X4Model):
                 ]
             )
 
-    def _maybe_stop_rotation_gradient(self, affines):
-        if not self.rotation_stop_gradient:
-            return affines
-        rot = affines[..., :3, :3].detach()
-        trans = affines[..., :3, 3:]
-        return torch.cat([rot, trans], dim=-1)
+        self.edge_aa_predictor = FusedEdgeAAPredictor(
+            d_edge=d_edge,
+            n_classes=self.num_res_types,
+        )
+
+        self.embed_cycle_aa = nn.Sequential(
+            nn.LayerNorm(self.num_res_types),
+            nn.Linear(self.num_res_types, d_node, bias=False),
+        )
+        self.embed_cycle_edge_aa = nn.Sequential(
+            nn.LayerNorm(self.num_res_types * self.num_res_types),
+            nn.Linear(self.num_res_types * self.num_res_types, d_edge, bias=False),
+        )
+        self.embed_cycle_conf = nn.Sequential(
+            nn.LayerNorm(2),
+            nn.Linear(2, d_node, bias=False),
+        )
+        self.embed_cycle_edge_conf = nn.Sequential(
+            nn.LayerNorm(4),
+            nn.Linear(4, d_edge, bias=False),
+        )
+
+        if self.has_intermediate_refresh:
+            self.refresh_edge_head_embed = nn.Sequential(
+                nn.LayerNorm(d_edge),
+                nn.Linear(d_edge, d_edge, bias=False),
+            )
+
+    def _build_confidence_features(
+        self,
+        prev_rmsd: torch.Tensor,
+        edge_index: torch.Tensor,
+    ):
+        prev_rmsd = torch.clamp(prev_rmsd, min=0.0)
+        prev_conf = torch.exp(-prev_rmsd)
+
+        node_conf_feat = torch.cat([prev_rmsd, prev_conf], dim=-1)
+
+        neighbor_rmsd = prev_rmsd[edge_index]
+        neighbor_conf = prev_conf[edge_index]
+        src_rmsd = prev_rmsd[:, None, :].expand_as(neighbor_rmsd)
+        src_conf = prev_conf[:, None, :].expand_as(neighbor_conf)
+        edge_conf_feat = torch.cat(
+            [
+                0.5 * (src_rmsd + neighbor_rmsd),
+                torch.abs(src_rmsd - neighbor_rmsd),
+                0.5 * (src_conf + neighbor_conf),
+                torch.abs(src_conf - neighbor_conf),
+            ],
+            dim=-1,
+        )
+        return node_conf_feat, edge_conf_feat
 
     def forward(
         self,
-        affines,
-        prot_mask,
+        affines: torch.Tensor,
+        prot_mask: torch.Tensor,
         cryo_grids=None,
         cryo_global_origins=None,
         cryo_voxel_sizes=None,
-        prot_seq_embed=None,
-        prot_seq_embed_mask=None,
-        na_seq_embed=None,
-        na_seq_embed_mask=None,
+        prot_seq_embed: torch.Tensor = None,
+        prot_seq_embed_mask: torch.Tensor = None,
+        na_seq_embed: torch.Tensor = None,
+        na_seq_embed_mask: torch.Tensor = None,
+        prev_aa_probs: torch.Tensor = None,
+        prev_rmsd: torch.Tensor = None,
+        prev_node: torch.Tensor = None,
         batch=None,
         run_iters=1,
-        prev_node=None,
-        prev_aa_probs=None,
-        prev_rmsd=None,
+        **kwargs,
     ):
         if batch is None:
             batch = torch.zeros(len(affines), device=affines.device, dtype=torch.long)
@@ -184,9 +244,8 @@ class Model(V3X4Model):
 
         for run_iter in range(run_iters):
             with torch.no_grad() if run_iter < run_iters - 1 else contextlib.nullcontext():
-                cryo_init_affines = self._maybe_stop_rotation_gradient(init_affines)
                 node_density, edge_density, bde_out = self._run_cryo_init(
-                    affines=cryo_init_affines,
+                    affines=init_affines,
                     cryo_grids=cryo_grids,
                     cryo_global_origins=cryo_global_origins,
                     cryo_voxel_sizes=cryo_voxel_sizes,
@@ -219,19 +278,16 @@ class Model(V3X4Model):
                 edge = edge + self.embed_cycle_edge_conf(edge_conf_feat)
 
                 torsion_angles = None
-                edge_bias_affines = self._maybe_stop_rotation_gradient(init_affines)
-                edge_bias = self._compute_edge_bias(
-                    edge_bias_affines,
+                edge = edge + self._compute_edge_bias(
+                    init_affines,
                     torsion_angles,
                     prot_mask,
                     bde_out.edge_index,
                 )
-                edge = self._merge_edge_bias(edge, edge_bias)
 
                 affines_list = []
                 torsion_list = []
                 affines = init_affines
-                pos_emb = bde_out.pos3d_emb
                 seq_attn_idx = 0
                 for i in range(self.n_block):
                     do_seq_attn = (
@@ -257,15 +313,14 @@ class Model(V3X4Model):
                         node,
                         edge,
                         affines,
-                        pos_emb=pos_emb,
+                        pos_emb=bde_out.pos3d_emb,
                         edge_index=bde_out.edge_index,
                         use_checkpoint=self.use_checkpoint,
                     )
 
                     if do_geometry_update and i != self.n_block - 1:
-                        refresh_affines = self._maybe_stop_rotation_gradient(affines)
-                        node_density, edge_density, refresh_bde_out = self._run_cryo_init(
-                            affines=refresh_affines,
+                        node_density, edge_density, _ = self._run_cryo_init(
+                            affines=affines,
                             cryo_grids=cryo_grids,
                             cryo_global_origins=cryo_global_origins,
                             cryo_voxel_sizes=cryo_voxel_sizes,
@@ -281,15 +336,12 @@ class Model(V3X4Model):
                         edge_density_state = edge_density_state + self.refresh_edge_head_embed(edge_density)
                         node = node + self.refresh_node_embed(node_density)
                         edge = edge + self.refresh_edge_embed(edge_density)
-                        edge_bias_affines = self._maybe_stop_rotation_gradient(affines)
-                        edge_bias = self._compute_edge_bias(
-                            edge_bias_affines,
+                        edge = edge + self._compute_edge_bias(
+                            affines,
                             torsion_angles,
                             prot_mask,
                             bde_out.edge_index,
                         )
-                        edge = self._merge_edge_bias(edge, edge_bias)
-                        pos_emb = refresh_bde_out.pos3d_emb
 
                     if do_geometry_update:
                         affines_list.append(affines)
@@ -313,6 +365,8 @@ class Model(V3X4Model):
                 init_edge = edge
 
                 with torch.no_grad():
+                    # Original implementation kept here for reference:
+                    # init_aa_logits = torch.softmax(pred_aatype, dim=-1)
                     prot_probs = torch.softmax(pred_aatype[..., :20], dim=-1)
                     na_probs = torch.softmax(pred_aatype[..., 20:], dim=-1)
                     init_aa_logits = torch.zeros_like(pred_aatype)
@@ -328,6 +382,15 @@ class Model(V3X4Model):
                         torch.zeros_like(na_probs),
                     )
 
+                    # Original implementation kept here for reference:
+                    # init_edge_aa_logits = torch.softmax(
+                    #     pred_edge_aa_logits.reshape(
+                    #         pred_edge_aa_logits.shape[0],
+                    #         pred_edge_aa_logits.shape[1],
+                    #         -1,
+                    #     ),
+                    #     dim=-1,
+                    # )
                     init_edge_aa_logits = torch.softmax(
                         pred_edge_aa_logits.reshape(
                             pred_edge_aa_logits.shape[0],
@@ -340,7 +403,7 @@ class Model(V3X4Model):
                 with torch.no_grad():
                     init_rmsd = rmsd
 
-        output = Output(
+        return Output(
             prot_mask=prot_mask,
             pred_aatype=pred_aatype,
             pred_aa_logits=pred_aatype,
@@ -356,12 +419,3 @@ class Model(V3X4Model):
             full_edge_index=bde_out.full_edge_index,
             pred_pairing=pred_pairing if self.pred_pairing else None,
         )
-        if self.pred_ss:
-            output["pred_ss_logits"] = self.ss_predictor(output["recycle_node_state"])
-        else:
-            output["pred_ss_logits"] = None
-        if self.pred_na_type:
-            output["pred_na_type_logits"] = self.na_type_predictor(output["recycle_node_state"])
-        else:
-            output["pred_na_type_logits"] = None
-        return output
