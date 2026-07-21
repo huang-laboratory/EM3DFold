@@ -1,6 +1,7 @@
 import os
 import json
 import copy
+import shutil
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -17,6 +18,7 @@ from em3dfold.infer.hmm.hmm_sequence_align import (
     fix_chains_pipeline,
     prune_and_connect_chains,
 )
+from em3dfold.infer.hmm.aa_probs_to_hmm import dump_aa_logits_to_hmm_file
 from em3dfold.io.pdbio import chains_atom_pos_to_pdb
 from em3dfold.io.seqio import read_fasta
 from em3dfold.polymer_utils.residue_constants import num_prot, select_torsion_angles
@@ -247,6 +249,101 @@ def _write_chain_file(
         suffix="cif",
     )
     print(f"# Output chains to {filename}")
+
+
+def _resolve_chain_hmm_profile_dir():
+    value = os.environ.get("EM3DFOLD_CHAIN_HMM_PROFILE_DIR", "")
+    if str(value).strip() == "":
+        return None
+    return abspath(value)
+
+
+def _infer_na_hmm_alphabet(chain_res_type):
+    chain_res_type = np.asarray(chain_res_type, dtype=np.int32)
+    if chain_res_type.size == 0:
+        return "RNA"
+    dna_votes = int(np.sum((chain_res_type >= num_prot) & (chain_res_type < num_prot + 4)))
+    rna_votes = int(np.sum((chain_res_type >= num_prot + 4) & (chain_res_type < num_prot + 8)))
+    return "DNA" if dna_votes > rna_votes else "RNA"
+
+
+def _dump_chain_hmm_profiles(
+    profile_root_dir,
+    reordered_final_results,
+    protein_chains,
+    protein_chain_types,
+    na_chains,
+    na_chain_types,
+    *,
+    profile_set_name,
+):
+    if profile_root_dir is None:
+        return
+    profile_dir = os.path.join(profile_root_dir, profile_set_name)
+    if os.path.isdir(profile_dir):
+        shutil.rmtree(profile_dir)
+    os.makedirs(profile_dir, exist_ok=True)
+
+    pred_aatype = np.asarray(reordered_final_results["pred_aatype"], dtype=np.float32)
+    confidence = reordered_final_results.get("confidence")
+    residue_confidence = None
+    if confidence is not None:
+        confidence = np.asarray(confidence, dtype=np.float32)
+        residue_confidence = confidence[:, 0] if confidence.ndim >= 2 else confidence
+
+    summary = []
+
+    for chain_idx, chain in enumerate(protein_chains):
+        chain = np.asarray(chain, dtype=np.int32)
+        chain_name = f"protein_chain_{chain_idx:04d}"
+        output_file = os.path.join(profile_dir, f"{chain_name}.hmm")
+        chain_conf = None if residue_confidence is None else np.asarray(residue_confidence[chain], dtype=np.float32)
+        dump_aa_logits_to_hmm_file(
+            pred_aatype[chain],
+            output_file,
+            confidence=chain_conf,
+            name=chain_name,
+            alphabet_type="amino",
+        )
+        summary.append({
+            "name": chain_name,
+            "type": "protein",
+            "alphabet": "amino",
+            "length": int(len(chain)),
+            "path": output_file,
+        })
+
+    for chain_idx, (chain, chain_res_type) in enumerate(zip(na_chains, na_chain_types)):
+        chain = np.asarray(chain, dtype=np.int32)
+        alphabet = _infer_na_hmm_alphabet(chain_res_type)
+        chain_name = f"na_chain_{chain_idx:04d}"
+        chain_logits = np.asarray(pred_aatype[chain], dtype=np.float32)
+        if chain_logits.shape[-1] == (num_prot + 4):
+            alphabet = "RNA"
+            expanded_logits = np.full((chain_logits.shape[0], num_prot + 8), -100.0, dtype=np.float32)
+            expanded_logits[:, num_prot + 4 : num_prot + 8] = chain_logits[:, num_prot : num_prot + 4]
+            chain_logits = expanded_logits
+        output_file = os.path.join(profile_dir, f"{chain_name}.{alphabet.lower()}.hmm")
+        chain_conf = None if residue_confidence is None else np.asarray(residue_confidence[chain], dtype=np.float32)
+        dump_aa_logits_to_hmm_file(
+            chain_logits,
+            output_file,
+            confidence=chain_conf,
+            name=chain_name,
+            alphabet_type=alphabet,
+        )
+        summary.append({
+            "name": chain_name,
+            "type": "na",
+            "alphabet": alphabet,
+            "length": int(len(chain)),
+            "path": output_file,
+        })
+
+    summary_path = os.path.join(profile_dir, "profiles.json")
+    with open(summary_path, "w") as handle:
+        json.dump(summary, handle, indent=2)
+    print(f"# Output chain HMM profiles to {profile_dir}")
 
 
 def _softmax_numpy(logits):
@@ -675,11 +772,26 @@ def _filter_short_chains_with_fallback_masks(chains, chains_res_type, fallback_m
     return list(new_chains), list(new_chain_types), list(new_fallback_masks)
 
 
-def _predict_na_chain_types(reordered_final_results, na_chains):
-    return [
-        np.argmax(reordered_final_results["pred_aatype"][chain][..., num_prot:], axis=-1) + num_prot
-        for chain in na_chains
-    ]
+def _predict_na_chain_types(reordered_final_results, na_chains, *, rna_only=False):
+    chain_types = []
+    for chain in na_chains:
+        na_logits = np.asarray(reordered_final_results["pred_aatype"][chain][..., num_prot:], dtype=np.float32)
+        if rna_only and na_logits.shape[-1] >= 8:
+            shared_logits = np.stack(
+                [
+                    na_logits[..., 0] + na_logits[..., 4],
+                    na_logits[..., 1] + na_logits[..., 5],
+                    na_logits[..., 2] + na_logits[..., 6],
+                    na_logits[..., 3] + na_logits[..., 7],
+                ],
+                axis=-1,
+            )
+            chain_types.append(np.argmax(shared_logits, axis=-1) + num_prot + 4)
+        elif rna_only and na_logits.shape[-1] >= 4:
+            chain_types.append(np.argmax(na_logits[..., -4:], axis=-1) + num_prot + 4)
+        else:
+            chain_types.append(np.argmax(na_logits, axis=-1) + num_prot)
+    return chain_types
 
 
 def _pack_shared_na_logits(na_logits):
@@ -1181,7 +1293,7 @@ def _build_na_chain_outputs(
 
     if len(rna_seqs) + len(dna_seqs) == 0:
         before_chains = list(na_chains)
-        before_chain_types = _predict_na_chain_types(reordered_final_results, before_chains)
+        before_chain_types = _predict_na_chain_types(reordered_final_results, before_chains, rna_only=True)
         before_fallback_masks = [
             np.ones((len(chain),), dtype=bool) for chain in before_chains
         ]
@@ -2301,6 +2413,8 @@ def final_results_align_to_sequence(
     min_na_chain_len=1,
     fallback_to_predicted_na_types=True,
     na_aa_logits_data=None,
+    force_protein_mode=False,
+    force_na_mode=False,
 ):
     out_dir = abspath(output_dir)
     hmm_temp_dir = pjoin(out_dir, "hmm")
@@ -2314,6 +2428,15 @@ def final_results_align_to_sequence(
 
     has_protein_input = len(prot_seqs) > 0
     has_na_input = (len(dna_seqs) + len(rna_seqs)) > 0
+    if force_protein_mode or force_na_mode:
+        has_protein_input = bool(force_protein_mode)
+        has_na_input = bool(force_na_mode)
+        print(
+            "# No-seq force mode: protein={} na={}".format(
+                has_protein_input,
+                has_na_input,
+            )
+        )
 
     prot_mask = np.asarray(final_results["prot_mask"], dtype=bool)
     if has_protein_input and (not has_na_input):
@@ -2324,6 +2447,8 @@ def final_results_align_to_sequence(
         print("# Nucleic-acid-only mode: disable protein postprocess outputs")
         prot_mask = np.zeros_like(prot_mask, dtype=bool)
         na_mask = np.ones_like(prot_mask, dtype=bool)
+    elif has_na_input or has_protein_input:
+        na_mask = ~prot_mask
     else:
         na_mask = ~prot_mask
 
@@ -2564,6 +2689,27 @@ def final_results_align_to_sequence(
             reordered_final_results,
             na_after_chains,
             na_after_chain_types,
+        )
+
+    profile_root_dir = _resolve_chain_hmm_profile_dir()
+    if profile_root_dir is not None:
+        _dump_chain_hmm_profiles(
+            profile_root_dir,
+            reordered_final_results,
+            prot_before_chains,
+            prot_before_chain_types,
+            na_before_chains,
+            na_before_chain_types,
+            profile_set_name="before_prune",
+        )
+        _dump_chain_hmm_profiles(
+            profile_root_dir,
+            reordered_final_results,
+            prot_after_chains,
+            prot_after_chain_types,
+            na_after_chains,
+            na_after_chain_types,
+            profile_set_name="after_prune",
         )
 
     all_before_chains = []

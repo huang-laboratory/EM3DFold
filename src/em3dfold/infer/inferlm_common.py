@@ -570,6 +570,8 @@ def run_inference_loop(args, model_class, model_args, run_inference_fn):
         min_na_chain_len=getattr(args, "min_na_chain_len", 1),
         fallback_to_predicted_na_types=getattr(args, "fallback_to_predicted_na_types", True),
         na_aa_logits_data=postprocess_na_aa_logits_data,
+        force_protein_mode=getattr(args, "force_protein_mode", False),
+        force_na_mode=getattr(args, "force_na_mode", False),
     )
     if getattr(args, "extra_protein_trace_backend", "none") == "beam":
         beam_output_info = final_results_align_to_sequence_beam_protein(

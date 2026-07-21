@@ -904,6 +904,21 @@ def _build_na_lm(
 def main(args):
     build_started_at = time.time()
     os.environ["EM3DFOLD_KEEP_HMM_FILES"] = "1" if bool(getattr(args, "keep_hmm_files", True)) else "0"
+
+    has_protein_arg = _has_cli_sequence_arg(args.protein)
+    has_rna_arg = _has_cli_sequence_arg(args.rna)
+    has_dna_arg = _has_cli_sequence_arg(args.dna)
+    if not (has_protein_arg or has_rna_arg or has_dna_arg):
+        from em3dfold import build_no_seq
+
+        no_seq_args = argparse.Namespace(**vars(args))
+        no_seq_args.protein = False
+        no_seq_args.rna = False
+        no_seq_args.dna = False
+        no_seq_args.all = True
+        print("# No input sequences provided; fallback to no-seq modeling of all polymer types")
+        return build_no_seq.main(no_seq_args)
+
     script_dir = os.path.dirname(__file__)
     inferlm_cpx_model_config = _resolve_optional_file_path(args.cpx_model_config) or pjoin(
         script_dir, "infer", "config", "model_v3x2_12l_256_128_h8.yaml"
@@ -976,14 +991,6 @@ def main(args):
 
     multi_stage_device = args.device
     single_stage_device = _primary_device(args.device)
-
-    has_protein_arg = _has_cli_sequence_arg(args.protein)
-    has_rna_arg = _has_cli_sequence_arg(args.rna)
-    has_dna_arg = _has_cli_sequence_arg(args.dna)
-    if not (has_protein_arg or has_rna_arg or has_dna_arg):
-        raise ValueError(
-            "Please provide at least one input sequence via --protein and/or --rna and/or --dna."
-        )
 
     # preprocess
     _announce_build_stage("preprocess", active_stages)

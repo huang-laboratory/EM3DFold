@@ -1,11 +1,18 @@
 # EM3DFold
 
+<div align="center">
+<img src="assets/logo.png" alt="EM3DFold: AI-driven Atomic Structure Modeling from Cryo-EM Maps" width="600" />
+</div>
+
+
 ## Overview
 EM3DFold is a software package for automatic protein, RNA, and DNA structure modeling from cryo-EM density maps.
 
+<!--
 <p align="center">
   <img src="assets/header.png" alt="EM3DFold header" width=720" />
 </p>
+-->
 
 ## Requirements
 **Platform**: Linux.
