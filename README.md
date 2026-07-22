@@ -272,6 +272,63 @@ em3dfold build_no_seq --map MAP.mrc \
   --device 0
 ```
 
+Below shows how we download target map from the EMDB and run EM3DFold sequence-free modeling on it:
+```bash
+# download map (PDB-9Z2N, EMD-73772)
+wget https://files.wwpdb.org/pub/emdb/structures/EMD-73772/map/emd_73772.map.gz -O emd_73772.map.gz
+gunzip emd_73772.map.gz
+```
+```bash
+# run EM3DFold with build or build_no_seq
+em3dfold build --map emd_73772.map -o 73772
+```
+<table align="center">
+    <tr>
+        <td align="center">
+            <p>The input map</p>
+            <img src="assets/73772_map.jpg" width="400" />
+        </td>
+        <td align="center">
+            <p>The output model (blue) and the PDB model (green)</p>
+            <img src="assets/73772_model.jpg" width="400" />
+        </td>
+    </tr>
+</table>
+
+
+#### 5. Identify unknown protein/nucleic acids from cryo-EM map
+First, lanuch a sequence-free job on an input map:
+```bash
+em3dfold build --map MAP.mrc -o out_no_seq
+```
+Afterwards, run the `hmm_search` sub-program of em3dfold to search the possible sequences out of sequence databases:
+```bash
+em3dfold hmm_search \
+  --input-dir out_no_seq # must be the same output dir of the modeling job \
+  --protein-fasta protein_db.fa # contains all candidate sequences \
+  --na-fasta na_db.fa # contains all candidate sequences \
+  --out out_dir
+```
+The all/best matched sequences for each fragment are saved in `<out_dir>/all_hits.tsv` and `<out_dir>/best_hits.tsv`
+
+
+Below shows how we search the possible sequences of EMD-73722 against Homo sapiens sequence databases:
+```bash
+# download the sequence database of homo sapiens
+wget http://huanglab.phys.hust.edu.cn/EM3DFold/examples/73772/homo_sapiens_protein.fa -O homo_sapiens_protein.fa
+wget http://huanglab.phys.hust.edu.cn/EM3DFold/examples/73772/homo_sapiens_rna.fa -O homo_sapiens_rna.fa
+# run hmm_search on previous sequence-free modeling output directory, e.g. 73722
+em3dfold hmm_search --input-dir 73722 --protein-fasta homo_sapiens_protein.fa --na-fasta homo_sapiens_rna.fa -o 73722/hmm_output
+```
+
+Check our in-house searching result:
+```bash
+wget -qO- 'http://huanglab.phys.hust.edu.cn/EM3DFold/examples/73772/best_hits.tsv'
+```
+As shown, we identified 5 candidate sequences: `NR_024457.2`, `NM_001378633.1`, `NR_027232.1`, `XM_011522507.4`, `XR_007086624.1` for nucleic acids, in which `XM_011522507.4` contains the sequence of Chain B (a tRNA monomer) and is the correct match of chain B from PDB-9Z2N.
+
+For proteins, we identified 2 protein sequences as candidates: `Q08J23` and `P14618`, in which `Q08J23` is the exact match of chain A from PDB-9Z2N.
+
 
 
 ## Trouble shooting

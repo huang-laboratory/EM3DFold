@@ -56,6 +56,7 @@ def main():
         "eval": "em3dfold.pipeline.eval",
         "pred": "em3dfold.pipeline.pred",
         "qscore": "em3dfold.pipeline.get_qscore",
+        "hmm_search": "em3dfold.hmm_search",
         #"assemble": "em3dfold.pipeline.assemble",
     }
 
