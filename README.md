@@ -243,7 +243,7 @@ em3dfold build --map MAP.mrc \
   --device 0
 ```
 
-Below shows how we download target protein, RNA, DNA sequences and map from the PDB/EMDB and run EM3DFold modeling on it:
+Below shows how we download the target protein, RNA, DNA sequences and map from the PDB/EMDB and run EM3DFold modeling on it:
 ```bash
 # download sequence
 wget https://www.rcsb.org/fasta/entry/8Y9N -O 8Y9N.fa
@@ -295,7 +295,7 @@ em3dfold build_no_seq --map MAP.mrc \
   --device 0
 ```
 
-Below shows how we download target map from the EMDB and run EM3DFold sequence-free modeling on it:
+Below shows how we download the target map from the EMDB and run EM3DFold sequence-free modeling on it:
 ```bash
 # download map (PDB-9Z2N, EMD-73772)
 wget https://files.wwpdb.org/pub/emdb/structures/EMD-73772/map/emd_73772.map.gz -O emd_73772.map.gz
@@ -334,7 +334,7 @@ em3dfold build --map MAP.mrc -o out_no_seq
 Afterwards, run the `hmm_search` sub-program of em3dfold to search the possible sequences out of sequence databases:
 ```bash
 em3dfold hmm_search \
-  --input-dir out_no_seq \ # must be the same output dir of the modeling job
+  --input-dir out_no_seq \ # must be the same output dir of the seq-free modeling job
   --protein-fasta protein_db.fa \ # contains all candidate sequences
   --na-fasta na_db.fa \ # contains all candidate sequences
   --out out_dir
@@ -357,7 +357,7 @@ wget -qO- 'http://huanglab.phys.hust.edu.cn/EM3DFold/examples/73772/best_hits.ts
 ```
 As shown, we identified 5 candidate sequences: `NR_024457.2`, `NM_001378633.1`, `NR_027232.1`, `XM_011522507.4`, `XR_007086624.1` for nucleic acids, in which `XM_011522507.4` is the correct match of chain B of PDB-9Z2N.
 
-For proteins, we identified 2 protein sequences as candidates: `Q08J23` and `P14618`, in which `Q08J23` is the exact match of chain A of PDB-9Z2N.
+For proteins, we identified 2 protein sequences as candidates: `Q08J23` and `P14618`, in which `Q08J23` is the correct match of chain A of PDB-9Z2N.
 
 </details>
 
