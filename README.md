@@ -255,6 +255,16 @@ em3dfold build --map emd_39084.map --protein 8Y9N_prot.fa --rna 8Y9N_rna.fa --dn
 </table>
 
 
+#### 4. Modeling without sequences
+```bash
+em3dfold build --map MAP.mrc \
+  -o out_no_seq \
+  --device 0
+```
+By default, EM3DFold builds all protein and nucleic acid structures.
+
+
+
 ## Trouble shooting
 - **No module named "xxx"**: package `xxx` is missing in your current environment. Install it with `pip install xxx` or `conda install xxx`.
 
