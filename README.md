@@ -152,6 +152,7 @@ em3dfold build --help
 <details>
 <summary>Protein denovo modeling</summary>
 <br>
+
 ```bash
 em3dfold build --map MAP.mrc \ 
   --protein protein.fa \ 
@@ -191,6 +192,7 @@ em3dfold build --map emd_64369.map --protein 9UO1.fa -o 9UO1
 <details>
 <summary>RNA denovo modeling</summary>
 <br>
+
 ```bash
 em3dfold build --map MAP.mrc \ 
   --rna rna.fa \ 
@@ -231,6 +233,7 @@ em3dfold build --map emd_41059.map --rna 8T5O.fa -o 8T5O
 <details>
 <summary>Protein-nucleic acid complex denovo modeling</summary>
 <br>
+
 ```bash
 em3dfold build --map MAP.mrc \ 
   --protein protein.fa \ 
@@ -275,6 +278,7 @@ em3dfold build --map emd_39084.map --protein 8Y9N_prot.fa --rna 8Y9N_rna.fa --dn
 <details>
 <summary>Modeling without sequences</summary>
 <br>
+
 ```bash
 em3dfold build --map MAP.mrc \
   -o out_no_seq \
@@ -322,6 +326,7 @@ em3dfold build --map emd_73772.map -o 73772
 <details>
 <summary>Identify unknown protein/nucleic acids from cryo-EM map</summary>
 <br>
+
 First, lanuch a sequence-free job on an input map:
 ```bash
 em3dfold build --map MAP.mrc -o out_no_seq
