@@ -68,6 +68,7 @@ The provided `download.sh` script automatically downloads the pretrained weights
 ```bash
 # Download all weights and set env var `EM_WEIGHTS_DIR`
 # Replace /path/to/save/pretrained/weights/ to the actual path
+conda activate em3dfold
 bash scripts/download.sh /path/to/save/pretrained/weights/
 
 # After downloading, the conda env needs to be refreshed
