@@ -151,7 +151,7 @@ em3dfold build --help
 ## Examples
 <details>
 <summary>Protein denovo modeling</summary>
-
+<br>
 ```bash
 em3dfold build --map MAP.mrc \ 
   --protein protein.fa \ 
@@ -190,7 +190,7 @@ em3dfold build --map emd_64369.map --protein 9UO1.fa -o 9UO1
 
 <details>
 <summary>RNA denovo modeling</summary>
-
+<br>
 ```bash
 em3dfold build --map MAP.mrc \ 
   --rna rna.fa \ 
@@ -230,7 +230,7 @@ em3dfold build --map emd_41059.map --rna 8T5O.fa -o 8T5O
 
 <details>
 <summary>Protein-nucleic acid complex denovo modeling</summary>
-
+<br>
 ```bash
 em3dfold build --map MAP.mrc \ 
   --protein protein.fa \ 
@@ -274,7 +274,7 @@ em3dfold build --map emd_39084.map --protein 8Y9N_prot.fa --rna 8Y9N_rna.fa --dn
 
 <details>
 <summary>Modeling without sequences</summary>
-
+<br>
 ```bash
 em3dfold build --map MAP.mrc \
   -o out_no_seq \
@@ -321,7 +321,7 @@ em3dfold build --map emd_73772.map -o 73772
 
 <details>
 <summary>Identify unknown protein/nucleic acids from cryo-EM map</summary>
-
+<br>
 First, lanuch a sequence-free job on an input map:
 ```bash
 em3dfold build --map MAP.mrc -o out_no_seq
@@ -346,7 +346,7 @@ wget http://huanglab.phys.hust.edu.cn/EM3DFold/examples/73772/homo_sapiens_rna.f
 em3dfold hmm_search --input-dir 73772 --protein-fasta homo_sapiens_protein.fa --na-fasta homo_sapiens_rna.fa -o 73772/hmm_output
 ```
 
-We provid our searching result on this target, check the result:
+We provide our searching result on this target, check the result:
 ```bash
 wget -qO- 'http://huanglab.phys.hust.edu.cn/EM3DFold/examples/73772/best_hits.tsv'
 ```
