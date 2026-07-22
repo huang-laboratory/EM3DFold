@@ -149,7 +149,9 @@ em3dfold build --help
 ```
 
 ## Examples
-#### 1. Protein denovo modeling
+<details>
+<summary>Protein denovo modeling</summary>
+
 ```bash
 em3dfold build --map MAP.mrc \ 
   --protein protein.fa \ 
@@ -182,8 +184,13 @@ em3dfold build --map emd_64369.map --protein 9UO1.fa -o 9UO1
     </tr>
 </table>
 
+</details>
 
-#### 2. RNA denovo modeling
+
+
+<details>
+<summary>RNA denovo modeling</summary>
+
 ```bash
 em3dfold build --map MAP.mrc \ 
   --rna rna.fa \ 
@@ -216,8 +223,14 @@ em3dfold build --map emd_41059.map --rna 8T5O.fa -o 8T5O
     </tr>
 </table>
 
+</details>
 
-#### 3. Protein-nucleic acid complex denovo modeling
+
+
+
+<details>
+<summary>Protein-nucleic acid complex denovo modeling</summary>
+
 ```bash
 em3dfold build --map MAP.mrc \ 
   --protein protein.fa \ 
@@ -254,8 +267,14 @@ em3dfold build --map emd_39084.map --protein 8Y9N_prot.fa --rna 8Y9N_rna.fa --dn
     </tr>
 </table>
 
+</details>
 
-#### 4. Modeling without sequences
+
+
+
+<details>
+<summary>Modeling without sequences</summary>
+
 ```bash
 em3dfold build --map MAP.mrc \
   -o out_no_seq \
@@ -295,8 +314,14 @@ em3dfold build --map emd_73772.map -o 73772
     </tr>
 </table>
 
+</details>
 
-#### 5. Identify unknown protein/nucleic acids from cryo-EM map
+
+
+
+<details>
+<summary>Identify unknown protein/nucleic acids from cryo-EM map</summary>
+
 First, lanuch a sequence-free job on an input map:
 ```bash
 em3dfold build --map MAP.mrc -o out_no_seq
@@ -328,6 +353,8 @@ wget -qO- 'http://huanglab.phys.hust.edu.cn/EM3DFold/examples/73772/best_hits.ts
 As shown, we identified 5 candidate sequences: `NR_024457.2`, `NM_001378633.1`, `NR_027232.1`, `XM_011522507.4`, `XR_007086624.1` for nucleic acids, in which `XM_011522507.4` is the correct match of chain B of PDB-9Z2N.
 
 For proteins, we identified 2 protein sequences as candidates: `Q08J23` and `P14618`, in which `Q08J23` is the exact match of chain A of PDB-9Z2N.
+
+</details>
 
 
 
