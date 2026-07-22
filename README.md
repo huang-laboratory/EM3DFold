@@ -261,7 +261,16 @@ em3dfold build --map MAP.mrc \
   -o out_no_seq \
   --device 0
 ```
-By default, EM3DFold builds all protein and nucleic acid structures.
+By default, EM3DFold builds all protein and nucleic acid structures. We provide another sub-program `build_no_seq` with more options if you only want to build only the protein/nucleic acid parts.
+```bash
+# build_no_seq provides more options
+em3dfold build_no_seq --map MAP.mrc \
+  -o out_no_seq \
+  --protein \ # build the protein parts
+  --rna \ # build the nucleic acid parts
+  --dna \ # build the nucleic acid parts
+  --device 0
+```
 
 
 
