@@ -65,15 +65,27 @@ def _safe_name(name: str) -> str:
     return "".join(ch if (ch.isalnum() or ch in {"-", "_", "."}) else "_" for ch in text)
 
 
-def _read_text_fasta(path: str, *, nucleic: bool) -> List[Tuple[str, str, str]]:
+def _read_text_fasta(
+    path: str,
+    *,
+    nucleic: bool,
+    max_target_len: Optional[int] = None,
+) -> Tuple[List[Tuple[str, str, str]], int, int]:
     records: List[Tuple[str, str, str]] = []
+    filtered_count = 0
+    max_kept_len = 0
     for record in SeqIO.parse(path, "fasta"):
         seq = str(record.seq).upper().replace(" ", "").replace("\n", "").replace("\r", "")
         seq = seq.replace("-", "")
         if nucleic:
             seq = seq.replace("T", "U")
+        if max_target_len is not None and len(seq) > max_target_len:
+            filtered_count += 1
+            continue
         records.append((record.id, seq, record.description or record.id))
-    return records
+        if len(seq) > max_kept_len:
+            max_kept_len = len(seq)
+    return records, filtered_count, max_kept_len
 
 
 def _digitize_records(
@@ -247,16 +259,24 @@ def _search_one_mol(
     topk: int,
     write_a2m: bool,
     write_report: bool,
+    max_target_len: Optional[int],
 ) -> Tuple[List[Dict[str, object]], List[Dict[str, object]], List[Dict[str, object]], List[Tuple[str, str, str]]]:
     hmms = list(hmm_entries)
     if not hmms:
         raise RuntimeError(f"No valid {mol} HMM profiles were provided for search")
 
     print(f"# HMM search {mol}: loading FASTA from {fasta_path}")
-    fasta_records = _read_text_fasta(fasta_path, nucleic=(mol == "na"))
+    fasta_records, filtered_target_count, max_kept_target_len = _read_text_fasta(
+        fasta_path,
+        nucleic=(mol == "na"),
+        max_target_len=max_target_len,
+    )
     if not fasta_records:
         raise RuntimeError(f"No sequences were found in {fasta_path}")
-    print(f"# HMM search {mol}: loaded {len(fasta_records)} target sequences")
+    print(
+        f"# HMM search {mol}: loaded {len(fasta_records)} target sequences "
+        f"(filtered_long={filtered_target_count}, max_kept_len={max_kept_target_len})"
+    )
     print(f"# HMM search {mol}: digitizing target sequences")
     digitized = _digitize_records(fasta_records, alphabet)
     target_map = {name: (name, seq, desc) for name, seq, desc in fasta_records}
@@ -378,6 +398,7 @@ def add_args(parser):
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument("--topk", type=int, default=3, help="Top-k hits per query chain")
     parser.add_argument("--min-chain-len", type=int, default=6, help="Minimum query chain length to search")
+    parser.add_argument("--max-target-len", type=int, default=100000, help="Skip target sequences longer than this limit")
     parser.add_argument("--no-write-a2m", action="store_true", help="Do not write A2M files")
     parser.add_argument("--no-write-report", action="store_true", help="Do not write per-chain HMM search reports")
     return parser
@@ -423,6 +444,7 @@ def main(args):
             "cpus": args.cpus,
             "topk": args.topk,
             "min_chain_len": args.min_chain_len,
+            "max_target_len": args.max_target_len,
         },
         "profile_dirs": {key: str(value) for key, value in profile_dirs.items()},
     }
@@ -460,6 +482,7 @@ def main(args):
             topk=args.topk,
             write_a2m=(not args.no_write_a2m),
             write_report=(not args.no_write_report),
+            max_target_len=args.max_target_len,
         )
         all_rows.extend(protein_rows)
         best_rows.extend(protein_best)
@@ -503,6 +526,7 @@ def main(args):
             topk=args.topk,
             write_a2m=(not args.no_write_a2m),
             write_report=(not args.no_write_report),
+            max_target_len=args.max_target_len,
         )
         all_rows.extend(na_rows)
         best_rows.extend(na_best)
