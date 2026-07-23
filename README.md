@@ -351,6 +351,17 @@ wget http://huanglab.phys.hust.edu.cn/EM3DFold/examples/73772/homo_sapiens_rna.f
 em3dfold hmm_search --input-dir 73772 --protein-fasta homo_sapiens_protein.fa --na-fasta homo_sapiens_rna.fa -o 73772/hmm_output --max-target-len 10000 # ignore too long sequences
 ```
 
+The prepared `homo_sapiens_protein.fa` and `homo_sapiens_rna.fa` actually downloaded from protein and nucleic acid knowledge databases:
+```bash
+# nucleic acid from ncbi
+wget -O homo_sapiens_rna.fa.gz https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh38_latest/refseq_identifiers/GRCh38_latest_rna.fna.gz
+gunzip homo_sapiens_rna.fa.gz
+```
+```bash
+# protein downloaded from uniprotkb: https://www.uniprot.org/uniprotkb?query=Homo+sapiens&facets=reviewed%3Atrue
+```
+
+
 We provide our searching result on this target, check the result:
 ```bash
 wget -qO- 'http://huanglab.phys.hust.edu.cn/EM3DFold/examples/73772/best_hits.tsv'
@@ -358,6 +369,7 @@ wget -qO- 'http://huanglab.phys.hust.edu.cn/EM3DFold/examples/73772/best_hits.ts
 As shown, we identified 5 candidate sequences: `NR_024457.2`, `NM_001378633.1`, `NR_027232.1`, `XM_011522507.4`, `XR_007086624.1` for nucleic acids, in which `XM_011522507.4` is the correct match of chain B of PDB-9Z2N.
 
 For proteins, we identified 2 protein sequences as candidates: `Q08J23` and `P14618`, in which `Q08J23` is the correct match of chain A of PDB-9Z2N.
+
 
 </details>
 
