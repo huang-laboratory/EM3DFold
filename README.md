@@ -352,8 +352,10 @@ em3dfold hmm_search --input-dir 73772 --protein-fasta homo_sapiens_protein.fa --
 ```
 
 The original sources for the prepared `homo_sapiens_protein.fa` and `homo_sapiens_rna.fa`:
-- nucleic acid from ncbi: https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh38_latest/refseq_identifiers/GRCh38_latest_rna.fna.gz
-- protein downloaded from uniprotkb: https://www.uniprot.org/uniprotkb?query=Homo+sapiens&facets=reviewed%3Atrue
+- nucleic acid from ncbi
+  - https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh38_latest/refseq_identifiers/GRCh38_latest_rna.fna.gz
+- protein downloaded from uniprotkb
+  - https://www.uniprot.org/uniprotkb?query=Homo+sapiens&facets=reviewed%3Atrue
 
 
 We provide our searching result on this target, check the result:
