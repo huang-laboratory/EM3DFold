@@ -351,15 +351,9 @@ wget http://huanglab.phys.hust.edu.cn/EM3DFold/examples/73772/homo_sapiens_rna.f
 em3dfold hmm_search --input-dir 73772 --protein-fasta homo_sapiens_protein.fa --na-fasta homo_sapiens_rna.fa -o 73772/hmm_output --max-target-len 10000 # ignore too long sequences
 ```
 
-The prepared `homo_sapiens_protein.fa` and `homo_sapiens_rna.fa` actually downloaded from protein and nucleic acid knowledge databases:
-```bash
-# nucleic acid from ncbi
-wget -O homo_sapiens_rna.fa.gz https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh38_latest/refseq_identifiers/GRCh38_latest_rna.fna.gz
-gunzip homo_sapiens_rna.fa.gz
-```
-```bash
-# protein downloaded from uniprotkb: https://www.uniprot.org/uniprotkb?query=Homo+sapiens&facets=reviewed%3Atrue
-```
+The original sources for the prepared `homo_sapiens_protein.fa` and `homo_sapiens_rna.fa`:
+- nucleic acid from ncbi: https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh38_latest/refseq_identifiers/GRCh38_latest_rna.fna.gz
+- protein downloaded from uniprotkb: https://www.uniprot.org/uniprotkb?query=Homo+sapiens&facets=reviewed%3Atrue
 
 
 We provide our searching result on this target, check the result:
