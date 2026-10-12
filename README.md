@@ -97,6 +97,30 @@ pip install .
 
 If `env.yml` and pretrained weights changed, we will add more guidance here.
 
+## Optional conv-only FP16
+
+Pass `--conv-fp16` to standalone structure inference, or set
+`EM3DFOLD_CONV_FP16=1` before running `em3dfold build` / `build_no_seq`.
+This option is disabled by default. It uses FP16 only for structure-network
+3D convolutions and returns their outputs to FP32; the other operations and
+model parameters remain FP32. The inference entry point disables TF32.
+It does not affect segmentation and cannot be combined with full-model `--fp16`.
+CPU, training, and gradient-enabled execution use the original convolution.
+
+```powershell
+$env:EM3DFOLD_CONV_FP16 = "1"
+# Run build or build_no_seq with the usual arguments.
+# Set to "0" to disable for subsequent jobs.
+```
+
+This optimization changes numerical results. In two real-map examples with
+official no-LM weights and two internal iterations, mean/max final-anchor
+coordinate displacement from strict FP32 was 0.00098/0.040 Angstrom for
+protein and 0.00027/0.0024 Angstrom for RNA. The protein maximum reached
+0.226 Angstrom at three iterations, with one residue-type prediction changed.
+These examples do not guarantee accuracy on other inputs. Direct Python callers
+must disable both PyTorch TF32 flags themselves to reproduce this precision policy.
+
 ## Usage
 Running EM3DFold is straight forward with one command like
 ```bash

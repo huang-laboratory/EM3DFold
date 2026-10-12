@@ -82,6 +82,8 @@ def prepare_common_args(parser):
     parser.add_argument("--run-iters", default=2, type=int, help="Cycling steps for model forward")
     parser.add_argument("--batch-size", default=1, type=int, help="How many batches to run in parallel")
     parser.add_argument("--fp16", action="store_true", help="Use fp16 in inference")
+    parser.add_argument("--strict-fp32", action="store_true", help="Disable TF32 for structure-network inference")
+    parser.add_argument("--conv-fp16", action="store_true", help="Use FP16 only inside structure Conv3d; keep other operations FP32 and disable TF32")
     parser.add_argument(
         "--voxel-size",
         type=float,
@@ -683,8 +685,29 @@ def run_inference_loop(args, model_class, model_args, run_inference_fn):
 
 
 def run_main(args, model_class, model_args, run_inference_fn):
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
+    from em3dfold.utils.conv_precision import conv_fp16_requested
+    conv_fp16 = getattr(args, "conv_fp16", False) or conv_fp16_requested()
+    strict_fp32 = (getattr(args, "strict_fp32", False)
+                   or os.environ.get("EM3DFOLD_STRICT_FP32", "0").lower() in ("1", "true", "yes", "on"))
+    if strict_fp32 and getattr(args, "fp16", False):
+        raise ValueError("Strict FP32 cannot be combined with FP16 inference")
+    if conv_fp16 and getattr(args, "fp16", False):
+        raise ValueError("Conv-only FP16 cannot be combined with full FP16 inference")
+    torch.backends.cuda.matmul.allow_tf32 = not (strict_fp32 or conv_fp16)
+    torch.backends.cudnn.allow_tf32 = not (strict_fp32 or conv_fp16)
+    previous = os.environ.get("EM3DFOLD_CONV_FP16")
+    if conv_fp16:
+        os.environ["EM3DFOLD_CONV_FP16"] = "1"
+    try:
+        return _run_main(args, model_class, model_args, run_inference_fn)
+    finally:
+        if previous is None:
+            os.environ.pop("EM3DFOLD_CONV_FP16", None)
+        else:
+            os.environ["EM3DFOLD_CONV_FP16"] = previous
+
+
+def _run_main(args, model_class, model_args, run_inference_fn):
     seed_everything(42)
 
     script_dir = abspath(os.path.dirname(__file__))

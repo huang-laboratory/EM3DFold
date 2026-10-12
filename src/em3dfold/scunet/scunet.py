@@ -10,6 +10,7 @@ from einops import rearrange
 from einops.layers.torch import Rearrange, Reduce
 
 from em3dfold.scunet.frn import FilterResponseNorm3d
+from em3dfold.utils.triton_inference import use_triton
 
 # from https://github.com/huggingface/pytorch-image-models/blob/main/timm/layers/drop.py
 def drop_path(x, drop_prob: float = 0., training: bool = False, scale_by_keep: bool = True):
@@ -117,6 +118,11 @@ class WMSA(nn.Module):
 
     def __init__(self, input_dim, output_dim, head_dim, window_size, type):
         super(WMSA, self).__init__()
+        # Shared with segmentation; structure encoders explicitly opt in.
+        self.inference_backend = "torch"
+        self.triton_op_name = "window"
+        self._attention_mask_cache = {}
+        self._relation_device_cache = {}
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.head_dim = head_dim 
@@ -152,6 +158,10 @@ class WMSA(nn.Module):
         Returns:
             attn_mask: should be (1 1 w p p),
         """
+        cache_key = (self.type, h, w, d, p, shift, self.relative_position_params.device)
+        cache_enabled = use_triton(self, self.relative_position_params)
+        if cache_enabled and cache_key in self._attention_mask_cache:
+            return self._attention_mask_cache[cache_key]
         # supporting sqaure.
         attn_mask = torch.zeros(h, w, d, p, p, p, p, p, p, dtype=torch.bool, device=self.relative_position_params.device)
         if self.type == 'W':
@@ -165,6 +175,8 @@ class WMSA(nn.Module):
         attn_mask[:,  :, -1, :,  :, :s,  :,  :, s:] = True
         attn_mask[:,  :, -1, :,  :, s:,  :,  :, :s] = True
         attn_mask = rearrange(attn_mask, 'w1 w2 w3 p1 p2 p3 p4 p5 p6 -> 1 1 (w1 w2 w3) (p1 p2 p3) (p4 p5 p6)')
+        if cache_enabled:
+            self._attention_mask_cache[cache_key] = attn_mask
         return attn_mask
 
     def forward(self, x):
@@ -175,31 +187,57 @@ class WMSA(nn.Module):
         Returns:
             output: tensor shape [b h w d c]
         """
-        if self.type!='W': x = torch.roll(x, shifts=(-(self.window_size//2), -(self.window_size//2), -(self.window_size//2)), dims=(1,2,3))
-        x = rearrange(x, 'b (w1 p1) (w2 p2) (w3 p3) c -> b w1 w2 w3 p1 p2 p3 c', p1=self.window_size, p2=self.window_size, p3=self.window_size)
-        h_windows = x.size(1)
-        w_windows = x.size(2)
-        d_windows = x.size(3)
-        # sqaure validation
-        assert h_windows == w_windows == d_windows
-
-        x = rearrange(x, 'b w1 w2 w3 p1 p2 p3 c -> b (w1 w2 w3) (p1 p2 p3) c', p1=self.window_size, p2=self.window_size, p3=self.window_size)
+        spatial_shape = x.shape[1:4]
+        shifted = self.window_size // 2 if self.type != 'W' else 0
+        accelerated_layout = use_triton(self, x) and all(size % self.window_size == 0 for size in spatial_shape)
+        if accelerated_layout:
+            from em3dfold.models.v3x2.triton_window_attention import partition, unpartition
+            h_windows, w_windows, d_windows = (size // self.window_size for size in spatial_shape)
+            assert h_windows == w_windows == d_windows
+            x = partition(x, self.window_size, shifted)
+        else:
+            if self.type!='W': x = torch.roll(x, shifts=(-shifted, -shifted, -shifted), dims=(1,2,3))
+            x = rearrange(x, 'b (w1 p1) (w2 p2) (w3 p3) c -> b w1 w2 w3 p1 p2 p3 c', p1=self.window_size, p2=self.window_size, p3=self.window_size)
+            h_windows = x.size(1)
+            w_windows = x.size(2)
+            d_windows = x.size(3)
+            assert h_windows == w_windows == d_windows
+            x = rearrange(x, 'b w1 w2 w3 p1 p2 p3 c -> b (w1 w2 w3) (p1 p2 p3) c', p1=self.window_size, p2=self.window_size, p3=self.window_size)
 
         qkv = self.embedding_layer(x)
 
-        q, k, v = rearrange(qkv, 'b nw np (threeh c) -> threeh b nw np c', c=self.head_dim).chunk(3, dim=0)
-        sim = torch.einsum('hbwpc,hbwqc->hbwpq', q, k) * self.scale
+        accelerated = False
+        if use_triton(self, qkv):
+            from em3dfold.models.v3x2.triton_window_attention import supported, window_scores, window_values
+            accelerated = (not torch.backends.cuda.matmul.allow_tf32
+                           and supported(qkv, self.n_heads, self.head_dim))
+        if accelerated:
+            sim = window_scores(qkv, self.n_heads, self.head_dim) * self.scale
+        else:
+            q, k, v = rearrange(qkv, 'b nw np (threeh c) -> threeh b nw np c', c=self.head_dim).chunk(3, dim=0)
+            sim = torch.einsum('hbwpc,hbwqc->hbwpq', q, k) * self.scale
         # Adding learnable relative embedding
-        sim = sim + rearrange(self.relative_position_params[:, self.relation[:,:,0].long(), self.relation[:,:,1].long(), self.relation[:,:,2].long()], 'h p q -> h 1 1 p q')
+        relation = self.relation
+        if accelerated_layout or accelerated:
+            device = self.relative_position_params.device
+            if device not in self._relation_device_cache:
+                self._relation_device_cache[device] = relation.to(device)
+            relation = self._relation_device_cache[device]
+        sim = sim + rearrange(self.relative_position_params[:, relation[:,:,0].long(), relation[:,:,1].long(), relation[:,:,2].long()], 'h p q -> h 1 1 p q')
         # Using Attn Mask to distinguish different subwindows.
         if self.type != 'W':
             attn_mask = self.generate_mask(h_windows, w_windows, d_windows, self.window_size, shift=self.window_size//2)
             sim = sim.masked_fill_(attn_mask, float("-inf"))
 
         probs = nn.functional.softmax(sim, dim=-1)
-        output = torch.einsum('hbwij,hbwjc->hbwic', probs, v)
-        output = rearrange(output, 'h b w p c -> b w p (h c)')
+        if accelerated:
+            output = window_values(qkv, probs, self.n_heads, self.head_dim)
+        else:
+            output = torch.einsum('hbwij,hbwjc->hbwic', probs, v)
+            output = rearrange(output, 'h b w p c -> b w p (h c)')
         output = self.linear(output)
+        if accelerated_layout:
+            return unpartition(output, spatial_shape, self.window_size, shifted)
         output = rearrange(output, 'b (w1 w2 w3) (p1 p2 p3) c -> b (w1 p1) (w2 p2) (w3 p3) c', w1=h_windows, w2=w_windows, w3=d_windows, p1=self.window_size, p2=self.window_size, p3=self.window_size)
 
         if self.type!='W': output = torch.roll(output, shifts=(self.window_size//2, self.window_size//2, self.window_size//2), dims=(1,2,3))

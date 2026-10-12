@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from em3dfold.utils.triton_inference import use_triton
 
 __all__ = ['FilterResponseNorm1d', 'FilterResponseNorm2d',
            'FilterResponseNorm3d']
@@ -19,6 +20,9 @@ class FilterResponseNormNd(nn.Module):
         assert ndim in [3, 4, 5], \
             'FilterResponseNorm only supports 3d, 4d or 5d inputs.'
         super(FilterResponseNormNd, self).__init__()
+        # Shared with segmentation; structure encoders explicitly opt in.
+        self.inference_backend = "torch"
+        self.triton_op_name = "frn"
         shape = (1, num_features) + (1, ) * (ndim - 2)
         self.eps = nn.Parameter(torch.ones(*shape) * eps)
         if not learnable_eps:
@@ -31,6 +35,10 @@ class FilterResponseNormNd(nn.Module):
     def forward(self, x):
         avg_dims = tuple(range(2, x.dim()))
         nu2 = torch.pow(x, 2).mean(dim=avg_dims, keepdim=True)
+        if use_triton(self, x) and x.numel() > 0 and x.is_contiguous():
+            from em3dfold.models.v3x2.triton_pointwise import frn_affine
+            scale = torch.rsqrt(nu2 + torch.abs(self.eps))
+            return frn_affine(x, scale, self.gamma, self.beta, self.tau)
         x = x * torch.rsqrt(nu2 + torch.abs(self.eps))
         return torch.max(self.gamma * x + self.beta, self.tau)
 

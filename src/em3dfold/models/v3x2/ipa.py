@@ -6,6 +6,7 @@ from torch import nn
 
 from em3dfold.utils.affine_utils import affine_mul_vecs, invert_affine
 from em3dfold.models.modules import qk_modulation
+from em3dfold.utils.triton_inference import structure_backend, use_triton
 
 class InvariantPointAttention(nn.Module):
     def __init__(
@@ -18,6 +19,8 @@ class InvariantPointAttention(nn.Module):
         point_values: int = 8,
     ):
         super().__init__()
+        self.inference_backend = structure_backend()
+        self.triton_op_name = "rope"
         self.in_features = in_features
         self.in_features_edge = in_features_edge
         self.num_heads = attention_heads
@@ -78,7 +81,11 @@ class InvariantPointAttention(nn.Module):
         # Scalar Q/K/V attention terms.
         query_scalar = self.query_scalar_proj(node)  # N h d
         key_scalar = self.key_scalar_proj(node)[edge_index]  # N k h d
-        query_scalar, key_scalar = qk_modulation(query_scalar, key_scalar, pos_emb, edge_index)
+        modulated = None
+        if use_triton(self, query_scalar):
+            from em3dfold.models.v3x2.triton_pointwise import rope
+            modulated = rope(query_scalar, key_scalar, pos_emb, edge_index)
+        query_scalar, key_scalar = modulated if modulated is not None else qk_modulation(query_scalar, key_scalar, pos_emb, edge_index)
         value_scalar = self.value_scalar_proj(node)[edge_index]  # N k h d
 
         # Point Q/K/V attention terms in local frames.

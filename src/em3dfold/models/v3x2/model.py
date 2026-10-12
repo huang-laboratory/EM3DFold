@@ -5,6 +5,7 @@ from em3dfold.models.v3x2.track import rbf
 from em3dfold.models.v3x2.model_scunet import Model as V3XModel
 from em3dfold.polymer_utils import polymer
 from em3dfold.polymer_utils import residue_constants as rc
+from em3dfold.utils.triton_inference import structure_backend, use_triton
 
 
 class Model(V3XModel):
@@ -72,6 +73,8 @@ class Model(V3XModel):
         )
 
         self.pred_ss = pred_ss
+        self.inference_backend = structure_backend()
+        self.triton_op_name = "rbf"
         if self.pred_ss:
             self.ss_predictor = nn.Sequential(
                 nn.Linear(d_node, d_node),
@@ -127,7 +130,7 @@ class Model(V3XModel):
                     self.num_proxy_atoms,
                     self.num_proxy_atoms,
                 )
-                atom_pair_rbf = rbf(
+                atom_pair_rbf = self._edge_rbf(
                     atom_pair_dist.reshape(atom_pair_dist.shape[0], atom_pair_dist.shape[1], -1),
                     d_count=self.edge_bias_rbf_bins,
                 )
@@ -166,7 +169,7 @@ class Model(V3XModel):
                     anchor_atoms[:, None, :, None, :] - neighbor_atoms[:, :, None, :, :],
                     dim=-1,
                 )
-                atom_pair_rbf = rbf(
+                atom_pair_rbf = self._edge_rbf(
                     atom_pair_dist.reshape(atom_pair_dist.shape[0], atom_pair_dist.shape[1], -1),
                     d_count=self.edge_bias_rbf_bins,
                 )
@@ -177,6 +180,12 @@ class Model(V3XModel):
                 )
 
         return self.edge_bias_embed(atom_pair_rbf)
+
+    def _edge_rbf(self, distances, d_count):
+        if use_triton(self, distances):
+            from em3dfold.models.v3x2.triton_pointwise import radial_basis
+            return radial_basis(distances, bins=d_count)
+        return rbf(distances, d_count=d_count)
 
     def forward(self, *args, **kwargs):
         output = super().forward(*args, **kwargs)

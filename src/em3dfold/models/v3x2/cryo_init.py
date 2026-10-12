@@ -11,6 +11,8 @@ from em3dfold.utils.affine_utils import (
     sample_centered_rectangle_along_vector,
 )
 from em3dfold.utils.torch_utils import get_batches_to_idx
+from em3dfold.utils.triton_inference import structure_backend
+from em3dfold.utils.conv_precision import conv_fp16_requested, enable_structure_conv_fp16
 
 
 class EM3DSpatialMean(nn.Module):
@@ -385,6 +387,11 @@ class CryoInit(nn.Module):
         )
 
         self.backbone_distance_emb = BackboneDistanceEmbedding()
+        if conv_fp16_requested():
+            enable_structure_conv_fp16(self)
+        for module in self.modules():
+            if hasattr(module, "inference_backend"):
+                module.inference_backend = structure_backend()
 
     def _run_with_checkpoint(self, module: nn.Module, x: torch.Tensor):
         if self.use_checkpoint and x.requires_grad:

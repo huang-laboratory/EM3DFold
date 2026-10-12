@@ -6,6 +6,7 @@ import torch.nn as nn
 from einops.layers.torch import Rearrange
 
 from em3dfold.utils.torch_utils import get_batch_slices, padded_sequence_softmax
+from em3dfold.utils.triton_inference import structure_backend, use_triton
 
 
 def get_batched_sequence_attention_scores(
@@ -68,6 +69,8 @@ class SequenceAttention(nn.Module):
         checkpoint: bool = True,
     ):
         super().__init__()
+        self.inference_backend = structure_backend()
+        self.triton_op_name = "sequence"
         self.d = d
         self.d_seq_prot = d_seq
         self.d_seq_na = d_seq if d_seq_na is None else d_seq_na
@@ -162,6 +165,22 @@ class SequenceAttention(nn.Module):
         sequence_query = q_module(y)
         sequence_key = k_module(sequence_emb)
         sequence_value = v_module(sequence_emb)
+
+        accelerated = (use_triton(self, sequence_query) and sequence_query.numel() > 0
+                       and batch_subset.is_contiguous() and attention_batch_size > 0
+                       and batch_subset.device == sequence_query.device
+                       and batch_subset.dtype in (torch.int32, torch.int64)
+                       and sequence_key.dtype == torch.float32 and sequence_value.dtype == torch.float32)
+        if accelerated:
+            from em3dfold.models.v3x2.triton_sequence_attention import scores, features
+            sequence_attention_scores = scores(sequence_query, sequence_key, batch_subset,
+                                               self.attention_scale, attention_batch_size)
+            batched_mask = sequence_mask[batch_subset].unsqueeze(-1)
+            sequence_attention_weights = padded_sequence_softmax(sequence_attention_scores, batched_mask, dim=1)
+            new_features_attention = features(sequence_attention_weights, sequence_value,
+                                             batch_subset, attention_batch_size)
+            gate = gate_module(y)
+            return back_module(gate * new_features_attention)
 
         sequence_attention_scores = get_batched_sequence_attention_scores(
             sequence_query,
