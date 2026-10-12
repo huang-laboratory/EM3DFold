@@ -269,7 +269,8 @@ def get_inference_data(
 def update_polymer_gt_frames(
     polymer, update_indices: np.ndarray, update_affines: np.ndarray
 ):
-    polymer.rigidgroups_gt_frames[update_indices][:, 0] = update_affines
+    # Index the original array directly: chained advanced indexing writes to a copy.
+    polymer.rigidgroups_gt_frames[update_indices, 0] = update_affines
     return polymer
 
 
