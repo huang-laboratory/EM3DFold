@@ -29,14 +29,41 @@ EM3DFold is a software package for automatic protein, RNA, and DNA structure mod
 
 **Disk Storage**: EM3DFold pretrained weights and language model weights require at least 6 GB free disk space.
 
+## Install with AI agents
+
+You can give an AI coding agent access to a terminal and use the prompt below. Replace the paths and test item when needed. The agent should inspect your machine before installing so that the EM3DFold, PyTorch, CUDA, and flash-attention versions are compatible.
+
+```text
+Install EM3DFold from the current repository and test one complete item.
+
+Before installing, inspect this repository and the current Linux system, including:
+- GPU model and available VRAM
+- NVIDIA driver and the CUDA version reported by nvidia-smi
+- installed CUDA toolkit, compiler, Python, Conda, and Mamba versions
+- available disk space
+
+Create a new isolated environment. Choose either the documented Conda workflow or
+the documented Mamba workflow, depending on what is available. Select compatible
+PyTorch/CUDA and flash-attention builds for this system. Do not replace the system
+CUDA installation or NVIDIA driver. If the provided installation script is not
+compatible with this system, explain the incompatibility before making the smallest
+necessary adjustment.
+
+Install the pretrained weights, then verify:
+1. Python, EM3DFold, PyTorch, CUDA, SciPy, NumPy, and flash-attention imports/versions.
+2. torch.cuda.is_available() is true and a small CUDA tensor operation succeeds.
+3. em3dfold --version and em3dfold --help succeed.
+4. One complete target from the README Examples section runs successfully. Use my
+   input map/FASTA/weights paths if I supplied them; otherwise use one documented
+   example item. Ask before downloading a large test item if its inputs are absent.
+
+Report the exact environment path, commands, detected and installed versions, test
+item, runtime, peak GPU memory if available, output path, and any warnings or errors.
+Do not overwrite an existing environment or existing result directory.
+```
+
 ## Installation
-#### 1. Install Conda or Mamba
-
-We recommend using Conda or Mamba to manage the environment. If neither is installed, install Miniforge, Miniconda, or Anaconda first. Mamba can use the same `env.yml` while resolving the environment faster.
-
-[Click here](https://docs.conda.io/en/latest/miniconda.html) to see guidance to install Miniconda.
-
-#### 2. Download EM3DFold
+#### 1. Download EM3DFold
 
 Download EM3DFold via `git` (recommended):
 ```bash
@@ -50,59 +77,64 @@ unzip main.zip
 cd EM3DFold-main
 ```
 
-#### 3. Create the environment and install dependencies
+#### 2A. Install with Conda
 
-With Conda:
+Install [Miniconda](https://docs.conda.io/en/latest/miniconda.html), Miniforge, or Anaconda first if `conda` is not available. Then, from the EM3DFold directory, create the `em3dfold` environment and install EM3DFold:
+
 ```bash
-# In the EM3DFold directory and have conda
 bash scripts/install.sh
-```
-
-> [!NOTE]
-> If you are familiar with Conda/Mamba/pip/shell or encounter problems with the scripts, you can run the commands in `install.sh` or `install_mamba.sh` step-by-step.
-
-With Mamba:
-```bash
-# If mamba is already in PATH
-bash scripts/install_mamba.sh
-
-# Or provide its absolute path
-MAMBA_EXE=/path/to/mamba bash scripts/install_mamba.sh
-```
-
-The Mamba script creates the same `em3dfold` environment and performs the same flash-attention, package-installation, and `--help` checks as `install.sh`. For an explicit environment prefix, set `EM3DFOLD_ENV_PREFIX=/path/to/environment`.
-
-#### 4. Download pretrained weights
-
-The provided `download.sh` script automatically downloads the pretrained weights of EM3DFold and the required language models into the specified directory:
-
-```bash
-# Download all weights and set env var `EM_WEIGHTS_DIR`
-# Replace /path/to/save/pretrained/weights/ to the actual path
 conda activate em3dfold
+```
+
+Download all pretrained weights and save their location in the Conda environment:
+
+```bash
+# Replace this path with your desired weights directory.
 bash scripts/download.sh /path/to/save/pretrained/weights/
 
-# After downloading, the conda env needs to be refreshed
+# Reload the environment so EM_WEIGHTS_DIR becomes available.
 conda deactivate
 conda activate em3dfold
-
-# Check if `EM_WEIGHTS_DIR` is successfully set
-echo $EM_WEIGHTS_DIR
+echo "$EM_WEIGHTS_DIR"
+em3dfold --help
 ```
 
-The equivalent Mamba command is:
+#### 2B. Install with Mamba
+
+Install [Mamba](https://mamba.readthedocs.io/en/latest/installation/mamba-installation.html) first if it is not available. Mamba uses the same `env.yml` as Conda and usually resolves the environment faster.
+
+If `mamba` is in `PATH`, run:
+
 ```bash
-MAMBA_EXE=/path/to/mamba bash scripts/download_mamba.sh /path/to/save/pretrained/weights/
+bash scripts/install_mamba.sh
+bash scripts/download_mamba.sh /path/to/save/pretrained/weights/
+mamba run -n em3dfold em3dfold --help
+```
+
+If Mamba is not in `PATH`, provide its absolute path consistently:
+
+```bash
+export MAMBA_EXE=/path/to/mamba
+bash scripts/install_mamba.sh
+bash scripts/download_mamba.sh /path/to/save/pretrained/weights/
+"$MAMBA_EXE" run -n em3dfold em3dfold --help
+```
+
+Both Mamba commands also accept an explicit environment prefix:
+
+```bash
+export EM3DFOLD_ENV_PREFIX=/path/to/environment
+bash scripts/install_mamba.sh
+bash scripts/download_mamba.sh /path/to/save/pretrained/weights/
+"${MAMBA_EXE:-mamba}" run --prefix "$EM3DFOLD_ENV_PREFIX" em3dfold --help
 ```
 
 > [!NOTE]
-> If downloading fails, download the weights manually. And if the script fails to set EM_WEIGHTS_DIR, run it manually:
+> If you are familiar with Conda/Mamba/pip/shell or encounter problems with the scripts, you can run the commands in `install.sh` or `install_mamba.sh` step-by-step. If downloading fails, download the weights manually. If the script fails to set `EM_WEIGHTS_DIR`, set it manually:
 > ```bash
-> # In EM3DFold env
 > conda env config vars set EM_WEIGHTS_DIR=/path/to/save/pretrained/weights/ -n em3dfold
-> # Or with Mamba
 > mamba env config vars set EM_WEIGHTS_DIR=/path/to/save/pretrained/weights/ -n em3dfold
->```
+> ```
 
 ## Update to latest version
 If you have already installed EM3DFold and want to get the latest version, run the following commands:
@@ -395,6 +427,10 @@ For proteins, we identified 2 protein sequences as candidates: `Q08J23` and `P14
 
 
 ## Trouble shooting
+<details>
+<summary>Click to show common installation and runtime problems</summary>
+<br>
+
 - **No module named "xxx"**: package `xxx` is missing in your current environment. Install it with `pip install xxx`, `conda install xxx`, or `mamba install xxx`.
 
 - **em3dfold: command not found**: you are probably not in the correct environment, activate EM3DFold environment and run again.
@@ -409,6 +445,8 @@ For proteins, we identified 2 protein sequences as candidates: `Q08J23` and `P14
   ```bash
   echo $CONDA_PREFIX
   ```
+
+</details>
 
 ## Citation
 If you find EM3DFold useful, please cite the following papers.
