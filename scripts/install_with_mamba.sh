@@ -30,7 +30,7 @@ resolve_executable() {
 
 usage() {
   cat <<'EOF'
-Usage: bash scripts/install_mamba.sh
+Usage: bash scripts/install_with_mamba.sh
 
 Optional environment variables:
   MAMBA_EXE             Mamba executable (default: mamba from PATH)

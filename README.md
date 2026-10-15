@@ -31,35 +31,12 @@ EM3DFold is a software package for automatic protein, RNA, and DNA structure mod
 
 ## Install with AI agents
 
-You can give an AI coding agent access to a terminal and use the prompt below. Replace the paths and test item when needed. The agent should inspect your machine before installing so that the EM3DFold, PyTorch, CUDA, and flash-attention versions are compatible.
+Give an AI coding agent terminal access and copy the prompt below, replacing paths when needed.
 
 ```text
-Install EM3DFold from the current repository and test one complete item.
-
-Before installing, inspect this repository and the current Linux system, including:
-- GPU model and available VRAM
-- NVIDIA driver and the CUDA version reported by nvidia-smi
-- installed CUDA toolkit, compiler, Python, Conda, and Mamba versions
-- available disk space
-
-Create a new isolated environment. Choose either the documented Conda workflow or
-the documented Mamba workflow, depending on what is available. Select compatible
-PyTorch/CUDA and flash-attention builds for this system. Do not replace the system
-CUDA installation or NVIDIA driver. If the provided installation script is not
-compatible with this system, explain the incompatibility before making the smallest
-necessary adjustment.
-
-Install the pretrained weights, then verify:
-1. Python, EM3DFold, PyTorch, CUDA, SciPy, NumPy, and flash-attention imports/versions.
-2. torch.cuda.is_available() is true and a small CUDA tensor operation succeeds.
-3. em3dfold --version and em3dfold --help succeed.
-4. One complete target from the README Examples section runs successfully. Use my
-   input map/FASTA/weights paths if I supplied them; otherwise use one documented
-   example item. Ask before downloading a large test item if its inputs are absent.
-
-Report the exact environment path, commands, detected and installed versions, test
-item, runtime, peak GPU memory if available, output path, and any warnings or errors.
-Do not overwrite an existing environment or existing result directory.
+1. Install EM3DFold from https://github.com/huang-laboratory/EM3DFold and test one complete item.
+2. Create a new isolated environment with compatible Python package versions, without changing the system CUDA/driver or overwriting existing environments and results.
+3. Download the pretrained weights, verify imports, then run one README example and report commands, environments, runtime, peak GPU memory, and outputs.
 ```
 
 ## Installation
@@ -106,17 +83,17 @@ Install [Mamba](https://mamba.readthedocs.io/en/latest/installation/mamba-instal
 If `mamba` is in `PATH`, run:
 
 ```bash
-bash scripts/install_mamba.sh
-bash scripts/download_mamba.sh /path/to/save/pretrained/weights/
+bash scripts/install_with_mamba.sh
+bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/
 mamba run -n em3dfold em3dfold --help
 ```
 
 If Mamba is not in `PATH`, provide its absolute path consistently:
 
 ```bash
-export MAMBA_EXE=/path/to/mamba
-bash scripts/install_mamba.sh
-bash scripts/download_mamba.sh /path/to/save/pretrained/weights/
+export MAMBA_EXE=/path/to/your/mamba
+bash scripts/install_with_mamba.sh
+bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/
 "$MAMBA_EXE" run -n em3dfold em3dfold --help
 ```
 
@@ -124,13 +101,13 @@ Both Mamba commands also accept an explicit environment prefix:
 
 ```bash
 export EM3DFOLD_ENV_PREFIX=/path/to/environment
-bash scripts/install_mamba.sh
-bash scripts/download_mamba.sh /path/to/save/pretrained/weights/
+bash scripts/install_with_mamba.sh
+bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/
 "${MAMBA_EXE:-mamba}" run --prefix "$EM3DFOLD_ENV_PREFIX" em3dfold --help
 ```
 
 > [!NOTE]
-> If you are familiar with Conda/Mamba/pip/shell or encounter problems with the scripts, you can run the commands in `install.sh` or `install_mamba.sh` step-by-step. If downloading fails, download the weights manually. If the script fails to set `EM_WEIGHTS_DIR`, set it manually:
+> If you are familiar with Conda/Mamba/pip/shell or encounter problems with the scripts, you can run the commands in `install.sh` or `install_with_mamba.sh` step-by-step. If downloading fails, download the weights manually. If the script fails to set `EM_WEIGHTS_DIR`, set it manually:
 > ```bash
 > conda env config vars set EM_WEIGHTS_DIR=/path/to/save/pretrained/weights/ -n em3dfold
 > mamba env config vars set EM_WEIGHTS_DIR=/path/to/save/pretrained/weights/ -n em3dfold
@@ -428,23 +405,44 @@ For proteins, we identified 2 protein sequences as candidates: `Q08J23` and `P14
 
 ## Trouble shooting
 <details>
-<summary>Click to show common installation and runtime problems</summary>
+<summary><code>No module named "xxx"</code></summary>
 <br>
 
-- **No module named "xxx"**: package `xxx` is missing in your current environment. Install it with `pip install xxx`, `conda install xxx`, or `mamba install xxx`.
+Package `xxx` is missing in your current environment. Install it with `pip install xxx`, `conda install xxx`, or `mamba install xxx`.
 
-- **em3dfold: command not found**: you are probably not in the correct environment, activate EM3DFold environment and run again.
+</details>
 
-- **CUDA / PyTorch related errors**: check whether your installed `torch` matches the local CUDA runtime and GPU driver.
+<details>
+<summary><code>em3dfold: command not found</code></summary>
+<br>
 
-- **GLIBCXX / CXXABI errors**: this usually means the runtime `libstdc++` in your current environment is older than the one required. A common fix is to add the EM3DFold environment `lib/` directory to `$LD_LIBRARY_PATH`:
-  ```bash
-  export LD_LIBRARY_PATH=/path/to/em3dfold/environment/lib:$LD_LIBRARY_PATH
-  ```
-  When the `em3dfold` environment is activated, you can find its prefix with:
-  ```bash
-  echo $CONDA_PREFIX
-  ```
+You are probably not in the correct environment. Activate the EM3DFold environment and run again.
+
+</details>
+
+<details>
+<summary>CUDA or PyTorch errors</summary>
+<br>
+
+Check whether your installed `torch` matches the local CUDA runtime and GPU driver.
+
+</details>
+
+<details>
+<summary>GLIBCXX or CXXABI errors</summary>
+<br>
+
+This usually means the runtime `libstdc++` in your current environment is older than the one required. A common fix is to add the EM3DFold environment `lib/` directory to `$LD_LIBRARY_PATH`:
+
+```bash
+export LD_LIBRARY_PATH=/path/to/em3dfold/environment/lib:$LD_LIBRARY_PATH
+```
+
+When the `em3dfold` environment is activated, you can find its prefix with:
+
+```bash
+echo $CONDA_PREFIX
+```
 
 </details>
 
