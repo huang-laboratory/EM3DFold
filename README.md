@@ -56,6 +56,9 @@ unzip main.zip
 cd EM3DFold-main
 ```
 
+> [!NOTE]
+> After downloading EM3DFold, choose one installation method: **Install with Conda** or **Install with Mamba**. You do not need to run both workflows.
+
 #### 2A. Install with Conda
 
 Install [Miniconda](https://docs.conda.io/en/latest/miniconda.html), Miniforge, or Anaconda first if `conda` is not available. Then, from the EM3DFold directory, create the `em3dfold` environment and install EM3DFold:

@@ -62,6 +62,9 @@ unzip main.zip
 cd EM3DFold-main
 ```
 
+> [!NOTE]
+> 下载 EM3DFold 后，请选择一种安装方式：**使用 Conda 安装**或**使用 Mamba 安装**。无需同时运行两套安装流程。
+
 #### 2A. 使用 Conda 安装
 
 如果系统中没有 `conda`，请先安装 [Miniconda](https://docs.conda.io/en/latest/miniconda.html)、Miniforge 或 Anaconda。然后在 EM3DFold 目录中创建 `em3dfold` 环境并安装 EM3DFold：
@@ -115,7 +118,7 @@ bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/
 ```
 
 > [!NOTE]
-> 如果你熟悉 Conda/Mamba/pip/shell，或者运行脚本时遇到问题，可以逐步执行 `install.sh` 或 `install_with_mamba.sh` 中的命令。如果下载失败，请手动下载权重。如果脚本无法设置 `EM_WEIGHTS_DIR`，请手动设置：
+> 如果你熟悉 Conda/Mamba/pip/shell，或者运行脚本时遇到问题，可以逐步执行 `install.sh` 或 `install_with_mamba.sh` 中的命令。如果下载失败，请手动下载权重。如果脚本没有成功设置 `EM_WEIGHTS_DIR`，请手动设置：
 > ```bash
 > conda env config vars set EM_WEIGHTS_DIR=/path/to/save/pretrained/weights/ -n em3dfold
 > mamba env config vars set EM_WEIGHTS_DIR=/path/to/save/pretrained/weights/ -n em3dfold
