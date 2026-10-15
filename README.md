@@ -30,9 +30,9 @@ EM3DFold is a software package for automatic protein, RNA, and DNA structure mod
 **Disk Storage**: EM3DFold pretrained weights and language model weights require at least 6 GB free disk space.
 
 ## Installation
-#### 1. Install conda
+#### 1. Install Conda or Mamba
 
-We recommend using conda to manage the environment. If conda is not installed, please install Miniforge, Miniconda or Anaconda first.
+We recommend using Conda or Mamba to manage the environment. If neither is installed, install Miniforge, Miniconda, or Anaconda first. Mamba can use the same `env.yml` while resolving the environment faster.
 
 [Click here](https://docs.conda.io/en/latest/miniconda.html) to see guidance to install Miniconda.
 
@@ -50,16 +50,27 @@ unzip main.zip
 cd EM3DFold-main
 ```
 
-#### 3. Create conda env and install dependencies
+#### 3. Create the environment and install dependencies
 
-We write the tedious installation steps into one script, so installation is one command like:
+With Conda:
 ```bash
 # In the EM3DFold directory and have conda
 bash scripts/install.sh
 ```
 
 > [!NOTE]
-> If you are familiar with conda/pip/shell or you encounter problems when running the above command, you could run commands in `install.sh` step-by-step.
+> If you are familiar with Conda/Mamba/pip/shell or encounter problems with the scripts, you can run the commands in `install.sh` or `install_mamba.sh` step-by-step.
+
+With Mamba:
+```bash
+# If mamba is already in PATH
+bash scripts/install_mamba.sh
+
+# Or provide its absolute path
+MAMBA_EXE=/path/to/mamba bash scripts/install_mamba.sh
+```
+
+The Mamba script creates the same `em3dfold` environment and performs the same flash-attention, package-installation, and `--help` checks as `install.sh`. For an explicit environment prefix, set `EM3DFOLD_ENV_PREFIX=/path/to/environment`.
 
 #### 4. Download pretrained weights
 
@@ -79,11 +90,18 @@ conda activate em3dfold
 echo $EM_WEIGHTS_DIR
 ```
 
+The equivalent Mamba command is:
+```bash
+MAMBA_EXE=/path/to/mamba bash scripts/download_mamba.sh /path/to/save/pretrained/weights/
+```
+
 > [!NOTE]
 > If downloading fails, download the weights manually. And if the script fails to set EM_WEIGHTS_DIR, run it manually:
 > ```bash
 > # In EM3DFold env
 > conda env config vars set EM_WEIGHTS_DIR=/path/to/save/pretrained/weights/ -n em3dfold
+> # Or with Mamba
+> mamba env config vars set EM_WEIGHTS_DIR=/path/to/save/pretrained/weights/ -n em3dfold
 >```
 
 ## Update to latest version
@@ -93,6 +111,11 @@ cd /path/to/EM3DFold/
 git pull
 conda activate em3dfold
 pip install .
+```
+
+With Mamba, the last two commands can instead be run without activation:
+```bash
+mamba run -n em3dfold python -m pip install .
 ```
 
 If `env.yml` and pretrained weights changed, we will add more guidance here.
@@ -372,17 +395,17 @@ For proteins, we identified 2 protein sequences as candidates: `Q08J23` and `P14
 
 
 ## Trouble shooting
-- **No module named "xxx"**: package `xxx` is missing in your current environment. Install it with `pip install xxx` or `conda install xxx`.
+- **No module named "xxx"**: package `xxx` is missing in your current environment. Install it with `pip install xxx`, `conda install xxx`, or `mamba install xxx`.
 
 - **em3dfold: command not found**: you are probably not in the correct environment, activate EM3DFold environment and run again.
 
 - **CUDA / PyTorch related errors**: check whether your installed `torch` matches the local CUDA runtime and GPU driver.
 
-- **GLIBCXX / CXXABI errors**: this usually means the runtime `libstdc++` in your current environment is older than the one required. A common fix is to add the EM3DFold conda environment `lib/` directory to `$LD_LIBRARY_PATH`:
+- **GLIBCXX / CXXABI errors**: this usually means the runtime `libstdc++` in your current environment is older than the one required. A common fix is to add the EM3DFold environment `lib/` directory to `$LD_LIBRARY_PATH`:
   ```bash
-  export LD_LIBRARY_PATH=/path/to/conda/env/em3dfold/lib:$LD_LIBRARY_PATH
+  export LD_LIBRARY_PATH=/path/to/em3dfold/environment/lib:$LD_LIBRARY_PATH
   ```
-  When the `em3dfold` environment is activated, you can find `/path/to/conda/env/em3dfold/` with:
+  When the `em3dfold` environment is activated, you can find its prefix with:
   ```bash
   echo $CONDA_PREFIX
   ```

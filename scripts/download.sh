@@ -6,6 +6,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOWNLOAD_ROOT="${1:-}"
 MODEL_WEIGHTS_DIR="${DOWNLOAD_ROOT}/weights"
 LM_WEIGHTS_DIR="${DOWNLOAD_ROOT}/lm_weights"
+ENV_MANAGER="${EM3DFOLD_ENV_MANAGER:-conda}"
+ENV_NAME="${EM3DFOLD_ENV_NAME:-em3dfold}"
+ENV_PREFIX="${EM3DFOLD_ENV_PREFIX:-}"
 
 # Override EM3DFOLD_WEIGHTS_URL if your hosted EM3DFold weights tarball uses a different path.
 EM3DFOLD_WEIGHTS_URL="${EM3DFOLD_WEIGHTS_URL:-http://huanglab.phys.hust.edu.cn/EM3DFold/weights/weights_v1.2.tgz}"
@@ -81,15 +84,38 @@ echo "Done download"
 echo "EM3DFold model weights: ${MODEL_WEIGHTS_DIR}"
 echo "LM weights: ${LM_WEIGHTS_DIR}"
 
-if command -v conda >/dev/null 2>&1; then
-  echo "4. Set EM_WEIGHTS_DIR in conda env"
-  run_step "Failed to set EM_WEIGHTS_DIR in conda env 'em3dfold'" \
-    conda env config vars set "EM_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR}" -n em3dfold
-  echo "Set conda env var: EM_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR} in env 'em3dfold'"
-  echo "Re-activate the env for the change to take effect:"
-  echo "> conda deactivate && conda activate em3dfold"
+if [[ "${ENV_MANAGER}" == */* ]]; then
+  ENV_MANAGER_AVAILABLE=false
+  if [[ -x "${ENV_MANAGER}" ]]; then
+    ENV_MANAGER_AVAILABLE=true
+  fi
 else
-  echo "Skip setting EM_WEIGHTS_DIR: conda is not available in PATH"
+  ENV_MANAGER_AVAILABLE=false
+  if command -v "${ENV_MANAGER}" >/dev/null 2>&1; then
+    ENV_MANAGER="$(command -v "${ENV_MANAGER}")"
+    ENV_MANAGER_AVAILABLE=true
+  fi
+fi
+
+if [[ "${ENV_MANAGER_AVAILABLE}" == true ]]; then
+  if [[ -n "${ENV_PREFIX}" ]]; then
+    env_target=(--prefix "${ENV_PREFIX}")
+    target_description="prefix '${ENV_PREFIX}'"
+  else
+    env_target=(--name "${ENV_NAME}")
+    target_description="environment '${ENV_NAME}'"
+  fi
+  echo "4. Set EM_WEIGHTS_DIR in ${target_description}"
+  run_step "Failed to set EM_WEIGHTS_DIR in ${target_description}" \
+    "${ENV_MANAGER}" env config vars set "EM_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR}" "${env_target[@]}"
+  echo "Set environment variable: EM_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR} in ${target_description}"
+  echo "Re-activate the environment for the change to take effect."
+else
+  echo "Skip setting EM_WEIGHTS_DIR: '${ENV_MANAGER}' is not available"
   echo "Run manually later:"
-  echo "> conda env config vars set EM_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR} -n em3dfold"
+  if [[ -n "${ENV_PREFIX}" ]]; then
+    echo "> ${ENV_MANAGER} env config vars set EM_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR} --prefix ${ENV_PREFIX}"
+  else
+    echo "> ${ENV_MANAGER} env config vars set EM_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR} --name ${ENV_NAME}"
+  fi
 fi
