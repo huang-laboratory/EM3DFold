@@ -1,5 +1,7 @@
 # EM3DFold
 
+English | [zh-CN](README.zh-CN.md)
+
 <div align="center">
 <!--
 <img src="assets/logo.png" alt="EM3DFold: AI-driven Atomic Structure Modeling from Cryo-EM Maps" width="600" />
@@ -21,7 +23,7 @@ EM3DFold is a software package for automatic protein, RNA, and DNA structure mod
 **Platform**: Linux.
 
 > [!NOTE]
-> To use EM3DFold on Windows, you may install a Linux system via [Windows WSL](https://learn.microsoft.com/en-us/windows/wsl/install).
+> To use EM3DFold on Windows, you may install a Linux sub-system via [Windows WSL](https://learn.microsoft.com/en-us/windows/wsl/install).
 
 **GPU**: A GPU with at least 12 GB VRAM is required.
 
@@ -186,9 +188,9 @@ em3dfold build --help
 <br>
 
 ```bash
-em3dfold build --map MAP.mrc \ 
-  --protein protein.fa \ 
-  --output out_protein \ 
+em3dfold build --map MAP.mrc \
+  --protein protein.fa \
+  --output out_protein \
   --device 0
 ```
 
@@ -226,9 +228,9 @@ em3dfold build --map emd_64369.map --protein 9UO1.fa -o 9UO1
 <br>
 
 ```bash
-em3dfold build --map MAP.mrc \ 
-  --rna rna.fa \ 
-  --output out_rna \ 
+em3dfold build --map MAP.mrc \
+  --rna rna.fa \
+  --output out_rna \
   --device 0
 ```
 
@@ -267,11 +269,11 @@ em3dfold build --map emd_41059.map --rna 8T5O.fa -o 8T5O
 <br>
 
 ```bash
-em3dfold build --map MAP.mrc \ 
-  --protein protein.fa \ 
-  --rna rna.fa \ 
+em3dfold build --map MAP.mrc \
+  --protein protein.fa \
+  --rna rna.fa \
   --dna dna.fa \
-  --output out_complex \ 
+  --output out_complex \
   --device 0
 ```
 
