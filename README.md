@@ -418,6 +418,20 @@ Package `xxx` is missing in your current environment. Install it with `pip insta
 </details>
 
 <details>
+<summary>Dependency resolution issues with Conda/Mamba</summary>
+<br>
+
+If Conda or Mamba cannot resolve and install all dependencies in [`env.yml`](env.yml) together, try the following approaches in order:
+
+1. **Install in stages to identify the conflict.** Create a fresh `em3dfold` environment and install the Python version specified in `env.yml`, then install the Conda dependencies before the pip dependencies. If the Conda dependencies still cannot be resolved together, install them in smaller groups or one at a time to identify the package causing the conflict. Do not continue using an environment left by a failed dependency resolution.
+
+2. **Make the smallest necessary version adjustment.** Use the Conda/Mamba error message to identify the conflicting package, change only that package, and prefer the closest compatible version to the one specified by the project. For example, `env.yml` pins `pillow==10.0.1`, which installs successfully in our tested environment; if a solver cannot install it, first check the configured channels and channel priorities, operating system and CPU architecture, and whether the local package metadata is stale before changing the Pillow version.
+
+After modifying any dependency version, record all changes and run `pip check`, import the key packages, and run `em3dfold --help` to confirm that the environment remains usable. If the problem persists, please open an issue and include your operating system and CPU architecture, Conda/Mamba version, configured channels, exact installation command, complete dependency resolution error message, and all dependency changes.
+
+</details>
+
+<details>
 <summary><code>em3dfold: command not found</code></summary>
 <br>
 

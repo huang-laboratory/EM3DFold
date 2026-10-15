@@ -454,6 +454,20 @@ wget -qO- 'http://huanglab.phys.hust.edu.cn/EM3DFold/examples/73772/best_hits.ts
 </details>
 
 <details>
+<summary>Conda/Mamba 依赖解析冲突</summary>
+<br>
+
+如果 Conda 或 Mamba 无法一次性解析并安装 [`env.yml`](env.yml) 中的全部依赖，可以按以下顺序尝试：
+
+1. **分阶段安装并定位冲突。** 创建全新的 `em3dfold` 环境并安装 `env.yml` 指定的 Python 版本，然后先安装 Conda 依赖，再安装 pip 依赖。如果 Conda 依赖仍然无法统一解析，可以将其分成较小的批次或逐个安装，以确定具体发生冲突的软件包。请勿继续使用依赖解析失败后留下的环境。
+
+2. **最小化调整冲突软件包的版本。** 根据 Conda/Mamba 的错误信息，只修改发生冲突的软件包，并优先选择最接近项目指定版本的兼容版本。例如，项目固定使用 `pillow==10.0.1`，该版本已在我们的测试环境中成功安装；如果求解器无法安装它，请先检查 channel 配置和优先级、操作系统及 CPU 架构，以及本地软件包元数据是否过期，再考虑调整 Pillow 版本。
+
+修改依赖版本后，请记录所有改动，并运行 `pip check`、关键软件包导入测试以及 `em3dfold --help`，确认环境仍然完整可用。如果问题仍然存在，请提交 issue，并附上操作系统、CPU 架构、Conda/Mamba 版本、channel 配置、完整安装命令、完整的依赖解析错误信息以及所有依赖改动。
+
+</details>
+
+<details>
 <summary><code>em3dfold: command not found</code></summary>
 <br>
 
