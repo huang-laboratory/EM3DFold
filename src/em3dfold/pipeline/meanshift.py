@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -22,6 +23,8 @@ except ImportError:  # pragma: no cover - optional runtime dependency
     torch = None
     F = None
 
+from em3dfold.pipeline.spatial_hash import membership_spatial, select_centers_spatial
+from em3dfold.pipeline.torch_merge import membership_torch
 from em3dfold.utils.cryo_utils import parse_map
 
 
@@ -42,6 +45,8 @@ class Params:
     backend: str = "auto"
     device: str = "auto"
     max_shift_iterations: int = 1000
+    merge_backend: str = "auto"
+    merge_block_size: int = 256
 
 
 def log_message(message: str) -> None:
@@ -330,6 +335,39 @@ def _mean_shift_scipy(
     return positions, densities
 
 
+def _resolve_mode_merge_backend(params: Params) -> tuple[str, bool]:
+    configured = os.environ.get(
+        "EM3DFOLD_MODE_MERGE_BACKEND", params.merge_backend
+    ).strip().lower()
+    aliases = {"cpu": "spatial", "cuda": "torch", "gpu": "torch"}
+    configured = aliases.get(configured, configured)
+    choices = {"auto", "spatial", "torch", "ckdtree"}
+    if configured not in choices:
+        raise ValueError(
+            "mode-merge backend must be one of auto, spatial, torch, or ckdtree"
+        )
+    automatic = configured == "auto"
+    if automatic:
+        resolved_device = _resolve_torch_device(params.device)
+        configured = "torch" if str(resolved_device).startswith("cuda") else "spatial"
+    if configured == "ckdtree" and cKDTree is None:
+        raise RuntimeError("cKDTree mode merging was requested but SciPy is unavailable")
+    return configured, automatic
+
+
+def _merge_block_size(params: Params) -> int:
+    value = os.environ.get(
+        "EM3DFOLD_MODE_MERGE_BLOCK_SIZE", str(params.merge_block_size)
+    )
+    try:
+        block_size = int(value)
+    except ValueError as exc:
+        raise ValueError("mode-merge block size must be an integer") from exc
+    if block_size <= 0:
+        raise ValueError("mode-merge block size must be greater than zero")
+    return block_size
+
+
 def _merge_modes(
     points_xyz: np.ndarray,
     densities: np.ndarray,
@@ -356,11 +394,11 @@ def _merge_modes(
 
     merge_radius = float(params.rmerge)
     candidates_world = candidates * mrc.voxel_size[None, :]
-    order = np.argsort(-candidate_dens)
-    alive = np.ones(len(candidates), dtype=bool)
-    centers_idx: list[int] = []
-
-    if cKDTree is not None:
+    merge_backend, automatic = _resolve_mode_merge_backend(params)
+    if merge_backend == "ckdtree":
+        order = np.argsort(-candidate_dens)
+        alive = np.ones(len(candidates), dtype=bool)
+        centers_idx: list[int] = []
         tree = cKDTree(candidates_world)
         for idx in order:
             if not alive[idx]:
@@ -369,28 +407,50 @@ def _merge_modes(
             neighbors = np.asarray(tree.query_ball_point(candidates_world[idx], r=merge_radius), dtype=np.int32)
             alive[neighbors] = False
     else:
-        log_message("WARNING scipy.spatial.cKDTree is unavailable; using slower NumPy merge fallback")
-        merge_radius2 = merge_radius * merge_radius
-        for idx in order:
-            if not alive[idx]:
-                continue
-            centers_idx.append(int(idx))
-            delta = candidates_world - candidates_world[idx][None, :]
-            neighbors = np.where(np.sum(delta * delta, axis=1) <= merge_radius2)[0]
-            alive[neighbors] = False
+        centers_idx = select_centers_spatial(
+            candidates_world, candidate_dens, merge_radius
+        ).tolist()
 
     center_ids = np.asarray(centers_idx, dtype=np.int32)
     centers = candidates[center_ids]
     center_densities = candidate_dens[center_ids]
 
-    if cKDTree is not None:
+    points_world = points_xyz * mrc.voxel_size[None, :]
+    centers_world = centers * mrc.voxel_size[None, :]
+    if merge_backend == "ckdtree":
         member_tree = cKDTree(centers * mrc.voxel_size[None, :])
-        membership = member_tree.query(points_xyz * mrc.voxel_size[None, :])[1].astype(np.int32, copy=False)
+        membership = member_tree.query(points_world)[1].astype(np.int32, copy=False)
+    elif merge_backend == "torch":
+        try:
+            membership = membership_torch(
+                points_world,
+                centers_world,
+                device=_resolve_torch_device(params.device),
+                block_size=_merge_block_size(params),
+            )
+        except RuntimeError as exc:
+            if not automatic:
+                raise
+            if torch is not None and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            log_message(
+                f"WARNING Torch GPU mode merging failed ({exc}); falling back to CPU spatial hash"
+            )
+            merge_backend = "spatial"
+            membership = membership_spatial(
+                points_world,
+                centers_world,
+                merge_radius,
+                known_within_radius=valid,
+            )
     else:
-        points_world = points_xyz * mrc.voxel_size[None, :]
-        centers_world = centers * mrc.voxel_size[None, :]
-        delta = points_world[:, None, :] - centers_world[None, :, :]
-        membership = np.argmin(np.sum(delta * delta, axis=2), axis=1).astype(np.int32, copy=False)
+        membership = membership_spatial(
+            points_world,
+            centers_world,
+            merge_radius,
+            known_within_radius=valid,
+        )
+    log_message(f"mode-merge backend = {merge_backend}")
     return (
         centers.astype(np.float32, copy=False),
         center_densities.astype(np.float32, copy=False),
@@ -460,6 +520,18 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--backend", choices=["auto", "torch", "scipy"], default="auto")
     parser.add_argument("--device", default="auto", help="Torch device, e.g. cuda:0 or cpu")
     parser.add_argument("--max-shift-iterations", type=int, default=5000)
+    parser.add_argument(
+        "--merge-backend",
+        choices=["auto", "spatial", "torch", "ckdtree"],
+        default="auto",
+        help="Mode-merge backend; auto uses Torch on CUDA and spatial hash on CPU",
+    )
+    parser.add_argument(
+        "--merge-block-size",
+        type=int,
+        default=256,
+        help="Query block size for Torch GPU membership assignment",
+    )
     parser.add_argument("--atom-name", default="CA")
     parser.add_argument("--res-name", default="GLY")
     parser.add_argument("--chain-id", default="A")
@@ -485,6 +557,8 @@ def main(args: argparse.Namespace) -> None:
         backend=str(args.backend),
         device=str(args.device),
         max_shift_iterations=int(args.max_shift_iterations),
+        merge_backend=str(args.merge_backend),
+        merge_block_size=int(args.merge_block_size),
     )
 
     log_message(f"threshold = {params.threshold:.4f}")
@@ -492,6 +566,7 @@ def main(args: argparse.Namespace) -> None:
     log_message(f"rmax = {params.rshift:.4f}")
     log_message(f"dmerge = {params.rmerge:.4f}")
     log_message(f"filter = {params.filter_fraction:.4f}")
+    log_message(f"merge backend = {params.merge_backend}")
 
     points, densities, _ = extract_points(mrc, params, init_coords_xyz=init_coords)
     log_message(f"retained points = {len(points)}")
