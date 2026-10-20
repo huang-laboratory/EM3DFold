@@ -2,6 +2,13 @@ import torch
 import numpy as np
 from scipy.spatial import cKDTree
 
+
+# Edge logits are trained and emitted in this order. Keep named constants here
+# because the tracing direction changes between predecessor lookup and chain merge.
+EDGE_NO_EDGE = 0
+EDGE_NEXT = 1
+EDGE_PREV = 2
+
 def flood_fill(
     atom_positions,
     b_factors=None,
@@ -133,24 +140,48 @@ def edge_correction(
     dmat,
     edge_existence_dict,
     idx_exist_to_original,
-    next_idx=None,
+    edge_class_idx=None,
+    reciprocal_edge_class_idx=None,
+    use_reciprocal=False,
     eps=1e-6,
 ):
     assert idx is not None
 
     # get connection probs
     existence = []
+    reciprocal_existence = []
     idx_original = idx_exist_to_original[idx]
+    source_edges = edge_existence_dict.get(idx_original, {})
 
     for pidx in possible_indices:
         pidx_original = idx_exist_to_original[pidx]
 
-        if pidx_original in edge_existence_dict[idx_original]:
-            existence.append( edge_existence_dict[idx_original][pidx_original][next_idx] )
+        if pidx_original in source_edges:
+            existence.append(
+                source_edges[pidx_original][edge_class_idx]
+            )
         else:
             existence.append( 0.1 )
 
+        if use_reciprocal:
+            reciprocal_info = edge_existence_dict.get(pidx_original, {}).get(idx_original)
+            if reciprocal_info is None:
+                reciprocal_existence.append(0.1)
+            else:
+                reciprocal_array = np.asarray(reciprocal_info, dtype=np.float32).reshape(-1)
+                if reciprocal_edge_class_idx >= reciprocal_array.size:
+                    reciprocal_existence.append(0.1)
+                else:
+                    reciprocal_existence.append(
+                        reciprocal_array[reciprocal_edge_class_idx]
+                    )
+
     existence = np.array(existence, dtype=np.float32).flatten()
+    if use_reciprocal:
+        reciprocal_existence = np.asarray(
+            reciprocal_existence, dtype=np.float32
+        ).flatten()
+        existence = np.sqrt(np.clip(existence * reciprocal_existence, 0.0, 1.0))
     connection_probs = np.exp(-4.0 * (dmat - 1.35 + eps) ** 2)
 
     return np.argsort(1 - connection_probs * existence)
@@ -331,6 +362,7 @@ def flood_fill_with_edge_dual(
     next_idx=0,
     edge_existence_dict=None,
     idx_exist_to_original=None,
+    use_reciprocal_edges=False,
 ):
     if b_factors is None:
         b_factors = np.ones( len(atom_positions), dtype=np.float32 )
@@ -376,7 +408,10 @@ def flood_fill_with_edge_dual(
                     dmat,
                     edge_existence_dict,
                     idx_exist_to_original,
-                    next_idx=1,
+                    # edge_dict[current][candidate predecessor] is a PREV edge.
+                    edge_class_idx=EDGE_PREV,
+                    reciprocal_edge_class_idx=EDGE_NEXT,
+                    use_reciprocal=use_reciprocal_edges,
                 )
             ]
 
@@ -443,7 +478,10 @@ def flood_fill_with_edge_dual(
                     dmat,
                     edge_existence_dict,
                     idx_exist_to_original,
-                    next_idx=0,
+                    # edge_dict[chain end][candidate chain start] is a NEXT edge.
+                    edge_class_idx=EDGE_NEXT,
+                    reciprocal_edge_class_idx=EDGE_PREV,
+                    use_reciprocal=use_reciprocal_edges,
                 )
             ]
 
@@ -493,12 +531,292 @@ def flood_fill_with_edge_dual(
     return chains
 
 
+def _edge_probability_vector(
+    edge_existence_dict,
+    idx_exist_to_original,
+    src_idx,
+    dst_idx,
+    default=(0.8, 0.1, 0.1),
+):
+    src_original = int(idx_exist_to_original[src_idx])
+    dst_original = int(idx_exist_to_original[dst_idx])
+    edge_info = edge_existence_dict.get(src_original, {}).get(dst_original)
+    if edge_info is None:
+        return np.asarray(default, dtype=np.float32)
+    edge_array = np.asarray(edge_info, dtype=np.float32).reshape(-1)
+    if edge_array.size != 3:
+        return np.asarray(default, dtype=np.float32)
+    return edge_array
+
+
+def global_path_cover_with_edge_dual_protein(
+    atom_positions,
+    edge_existence_dict,
+    idx_exist_to_original,
+    *,
+    bond_distance_threshold=1.5,
+    center_exclusion_distance_threshold=1.6,
+    cn_expected_distance=1.33,
+    cn_sigma=0.35,
+    ca_expected_distance=3.8,
+    ca_sigma=0.65,
+    edge_score_mode="reciprocal_probability",
+    geometry_weight=0.0,
+    minimum_edge_score=0.60,
+    assignment_backend="sparse",
+    assignment_objective="penalized",
+    eps=1e-6,
+):
+    """Build a maximum-weight directed path cover from reciprocal edge evidence.
+
+    Each residue can have at most one successor and one predecessor. Candidate
+    weights combine NEXT/PREV log odds with peptide geometry; assignment to a
+    private dummy column represents leaving a chain end open.
+    """
+    edge_score_mode = str(edge_score_mode).strip().lower()
+    if edge_score_mode not in {
+        "reciprocal_log_odds",
+        "reciprocal_log_probability",
+        "reciprocal_probability",
+    }:
+        raise ValueError(
+            "edge_score_mode must be 'reciprocal_log_odds', "
+            "'reciprocal_log_probability', or 'reciprocal_probability', got "
+            f"{edge_score_mode!r}"
+        )
+    geometry_weight = float(geometry_weight)
+    if geometry_weight < 0.0:
+        raise ValueError("geometry_weight must be non-negative")
+
+    atom_positions = np.asarray(atom_positions, dtype=np.float32)
+    num_nodes = len(atom_positions)
+    if num_nodes == 0:
+        return []
+
+    n_positions = atom_positions[:, 0]
+    ca_positions = atom_positions[:, 1]
+    c_positions = atom_positions[:, 2]
+    n_tree = cKDTree(n_positions)
+    edge_scores = {}
+
+    for src_idx in range(num_nodes):
+        candidates = n_tree.query_ball_point(
+            c_positions[src_idx],
+            r=bond_distance_threshold,
+            return_sorted=True,
+        )
+        for dst_idx in candidates:
+            dst_idx = int(dst_idx)
+            if dst_idx == src_idx:
+                continue
+            ca_distance = float(
+                np.linalg.norm(ca_positions[src_idx] - ca_positions[dst_idx])
+            )
+            if ca_distance < center_exclusion_distance_threshold:
+                continue
+            cn_distance = float(
+                np.linalg.norm(c_positions[src_idx] - n_positions[dst_idx])
+            )
+            forward = _edge_probability_vector(
+                edge_existence_dict,
+                idx_exist_to_original,
+                src_idx,
+                dst_idx,
+            )
+            reverse = _edge_probability_vector(
+                edge_existence_dict,
+                idx_exist_to_original,
+                dst_idx,
+                src_idx,
+            )
+            link_probability = np.sqrt(
+                max(float(forward[EDGE_NEXT]), eps)
+                * max(float(reverse[EDGE_PREV]), eps)
+            )
+            no_edge_probability = np.sqrt(
+                max(float(forward[EDGE_NO_EDGE]), eps)
+                * max(float(reverse[EDGE_NO_EDGE]), eps)
+            )
+            if edge_score_mode == "reciprocal_log_odds":
+                edge_evidence = float(
+                    np.log(link_probability + eps)
+                    - np.log(no_edge_probability + eps)
+                )
+            elif edge_score_mode == "reciprocal_log_probability":
+                edge_evidence = float(np.log(link_probability + eps))
+            else:
+                edge_evidence = float(link_probability)
+            geometry_score = _log_gaussian_score(
+                cn_distance,
+                cn_expected_distance,
+                cn_sigma,
+            ) + _log_gaussian_score(
+                ca_distance,
+                ca_expected_distance,
+                ca_sigma,
+            )
+            score = (
+                edge_evidence
+                + geometry_weight * geometry_score
+                - float(minimum_edge_score)
+            )
+            edge_scores[(src_idx, dst_idx)] = score
+
+    assignment_backend = str(assignment_backend).strip().lower()
+    assignment_objective = str(assignment_objective).strip().lower()
+    if assignment_objective not in {"penalized", "max_cardinality"}:
+        raise ValueError(
+            "assignment_objective must be 'penalized' or 'max_cardinality', got "
+            f"{assignment_objective!r}"
+        )
+
+    quantized_edge_scores = {
+        edge: float(np.float32(score)) for edge, score in edge_scores.items()
+    }
+    if assignment_objective == "max_cardinality" and quantized_edge_scores:
+        min_edge_score = min(quantized_edge_scores.values())
+        max_edge_score = max(quantized_edge_scores.values())
+        score_span = max_edge_score - min_edge_score
+        # This bonus makes cardinality lexicographically more important than
+        # the sum of all secondary edge scores. Among maximum-cardinality
+        # matchings, the original learned/geometry score still decides.
+        cardinality_bonus = (num_nodes + 1) * (score_span + 1.0)
+    else:
+        min_edge_score = 0.0
+        cardinality_bonus = 0.0
+
+    def assignment_weight(score):
+        if assignment_objective == "max_cardinality":
+            return cardinality_bonus + score - min_edge_score
+        return score
+
+    if assignment_backend == "dense":
+        from scipy.optimize import linear_sum_assignment
+
+        invalid_score = -1e6
+        weight_dtype = (
+            np.float64 if assignment_objective == "max_cardinality" else np.float32
+        )
+        weights = np.full(
+            (num_nodes, 2 * num_nodes), invalid_score, dtype=weight_dtype
+        )
+        rows = np.arange(num_nodes)
+        weights[rows, num_nodes + rows] = 0.0
+        for (src_idx, dst_idx), score in quantized_edge_scores.items():
+            if assignment_objective == "penalized" and score <= 0.0:
+                continue
+            weights[src_idx, dst_idx] = assignment_weight(score)
+        source_rows, assigned_columns = linear_sum_assignment(
+            weights, maximize=True
+        )
+    elif assignment_backend == "sparse":
+        from scipy.sparse import coo_matrix
+        from scipy.sparse.csgraph import min_weight_full_bipartite_matching
+
+        # Sparse matching does not retain explicit zero-weight edges.  Adding
+        # the same positive constant to every feasible edge preserves the
+        # objective because a full matching always contains num_nodes edges.
+        # Non-positive real edges can be omitted: every source has a private
+        # zero-score dummy edge and choosing a non-positive real edge can never
+        # improve the dense objective.
+        row_indices = list(range(num_nodes))
+        column_indices = list(range(num_nodes, 2 * num_nodes))
+        sparse_weights = [1.0] * num_nodes
+        for (src_idx, dst_idx), score in quantized_edge_scores.items():
+            if assignment_objective == "penalized" and score <= 0.0:
+                continue
+            row_indices.append(src_idx)
+            column_indices.append(dst_idx)
+            sparse_weights.append(1.0 + assignment_weight(score))
+        graph = coo_matrix(
+            (
+                np.asarray(sparse_weights, dtype=np.float64),
+                (
+                    np.asarray(row_indices, dtype=np.int32),
+                    np.asarray(column_indices, dtype=np.int32),
+                ),
+            ),
+            shape=(num_nodes, 2 * num_nodes),
+        ).tocsr()
+        source_rows, assigned_columns = min_weight_full_bipartite_matching(
+            graph, maximize=True
+        )
+    else:
+        raise ValueError(
+            "assignment_backend must be 'dense' or 'sparse', got "
+            f"{assignment_backend!r}"
+        )
+
+    successor = {}
+    predecessor = {}
+    selected_scores = {}
+    for src_idx, column in zip(source_rows.tolist(), assigned_columns.tolist()):
+        if column >= num_nodes:
+            continue
+        score = edge_scores.get((src_idx, column))
+        if score is None:
+            continue
+        if (
+            assignment_objective == "penalized"
+            and float(np.float32(score)) <= 0.0
+        ):
+            continue
+        successor[src_idx] = column
+        predecessor[column] = src_idx
+        selected_scores[(src_idx, column)] = edge_scores[(src_idx, column)]
+
+    # A bipartite assignment can contain directed cycles. Break the weakest edge
+    # in each cycle so the output is a collection of linear chains.
+    visited = set()
+    for start_idx in range(num_nodes):
+        if start_idx in visited:
+            continue
+        path_order = {}
+        path = []
+        current = start_idx
+        while current in successor and current not in visited:
+            if current in path_order:
+                cycle_nodes = path[path_order[current] :]
+                cycle_edges = [
+                    (node, successor[node]) for node in cycle_nodes
+                ]
+                weakest_edge = min(
+                    cycle_edges,
+                    key=lambda edge: selected_scores[edge],
+                )
+                del successor[weakest_edge[0]]
+                del predecessor[weakest_edge[1]]
+                break
+            path_order[current] = len(path)
+            path.append(current)
+            current = successor[current]
+        visited.update(path)
+
+    chains = []
+    used = set()
+    starts = [idx for idx in range(num_nodes) if idx not in predecessor]
+    for start_idx in starts:
+        chain = []
+        current = start_idx
+        while current not in used:
+            chain.append(current)
+            used.add(current)
+            if current not in successor:
+                break
+            current = successor[current]
+        chains.append(chain)
+    for node_idx in range(num_nodes):
+        if node_idx not in used:
+            chains.append([node_idx])
+    return chains
+
+
 def _safe_edge_probability(
     edge_existence_dict,
     idx_exist_to_original,
     src_idx,
     dst_idx,
-    next_idx,
+    edge_class_idx,
     default_value=0.1,
 ):
     if edge_existence_dict is None or idx_exist_to_original is None:
@@ -509,7 +827,7 @@ def _safe_edge_probability(
     edge_info = edge_existence_dict.get(src_original, {}).get(dst_original)
     if edge_info is None:
         return float(default_value)
-    if next_idx is None:
+    if edge_class_idx is None:
         if np.isscalar(edge_info):
             return float(edge_info)
         edge_array = np.asarray(edge_info, dtype=np.float32).reshape(-1)
@@ -518,9 +836,9 @@ def _safe_edge_probability(
         return float(np.max(edge_array))
 
     edge_array = np.asarray(edge_info, dtype=np.float32).reshape(-1)
-    if next_idx >= edge_array.size:
+    if edge_class_idx >= edge_array.size:
         return float(default_value)
-    return float(edge_array[next_idx])
+    return float(edge_array[edge_class_idx])
 
 
 def _log_gaussian_score(distance, expected_distance, sigma, eps=1e-6):
@@ -720,7 +1038,8 @@ def beam_trace_with_edge_dual_protein(
                         idx_exist_to_original=idx_exist_to_original,
                         src_idx=tail_idx,
                         dst_idx=candidate_idx,
-                        next_idx=0,
+                        # Beam tracing extends tail -> candidate in sequence order.
+                        edge_class_idx=EDGE_NEXT,
                     )
                     edge_prob = max(float(edge_prob), float(edge_prob_floor))
                     score_edge = float(np.log(edge_prob))
@@ -826,4 +1145,3 @@ def beam_trace_with_edge_dual_protein(
             "num_available_nodes": int(num_nodes - np.sum(frozen_mask)),
         },
     }
-

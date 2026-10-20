@@ -10,6 +10,7 @@ from em3dfold.infer.fixing import fix_match
 from em3dfold.infer.flood_fill import (
     beam_trace_with_edge_dual_protein,
     flood_fill_with_edge_dual,
+    global_path_cover_with_edge_dual_protein,
 )
 from em3dfold.infer.gnn_inference_utils import sample_na_aa_logits
 from em3dfold.infer.hmm.hmm_sequence_align import (
@@ -27,6 +28,281 @@ from em3dfold.utils.to_all_atom import affines_and_torsion_angles_to_atomc_pos
 
 
 FALLBACK_CONFIDENCE_SENTINEL = 0.0
+SHORT_PROTEIN_CHAIN_MAX_LENGTH = 5
+SHORT_PROTEIN_MODEL_CONFIDENCE_THRESHOLD = 0.80
+SHORT_PROTEIN_RESIDUE_TYPE_CONFIDENCE_THRESHOLD = 0.95
+SHORT_PROTEIN_PARENT_HMM_SCORE_THRESHOLD = 0.90
+SHORT_PROTEIN_LOW_CONFIDENCE_VOTES = 2
+
+
+def _surviving_original_indices(existence_mask: np.ndarray) -> np.ndarray:
+    """Map compact post-filter rows back to their pre-filter node indices."""
+    return np.flatnonzero(np.asarray(existence_mask, dtype=bool)).astype(np.int32)
+
+
+def _split_chain_outputs_at_backbone_discontinuities(
+    chains,
+    chain_types,
+    atom_positions,
+    *,
+    max_cn_distance=2.0,
+    max_ca_distance=None,
+):
+    """Split post-pruning chains instead of bridging over removed residues.
+
+    HMM pruning and duplicate removal can delete nodes from the middle of a traced
+    chain.  Keeping the survivors in one array makes the writer emit a false
+    peptide edge across the resulting gap.  Splitting preserves every residue and
+    its assigned type while making the discontinuity explicit.
+    """
+    split_chains = []
+    split_chain_types = []
+    num_splits = 0
+
+    for chain, residue_types in zip(chains, chain_types):
+        chain = np.asarray(chain, dtype=np.int32)
+        residue_types = np.asarray(residue_types)
+        if len(chain) != len(residue_types):
+            raise ValueError("chain and residue-type lengths do not match")
+        if len(chain) == 0:
+            continue
+
+        segment_start = 0
+        for offset in range(1, len(chain)):
+            prev_idx = int(chain[offset - 1])
+            next_idx = int(chain[offset])
+            cn_distance = float(
+                np.linalg.norm(atom_positions[prev_idx, 2] - atom_positions[next_idx, 0])
+            )
+            ca_distance = float(
+                np.linalg.norm(atom_positions[prev_idx, 1] - atom_positions[next_idx, 1])
+            )
+            ca_is_discontinuous = (
+                max_ca_distance is not None and ca_distance > max_ca_distance
+            )
+            if cn_distance > max_cn_distance or ca_is_discontinuous:
+                split_chains.append(chain[segment_start:offset])
+                split_chain_types.append(residue_types[segment_start:offset])
+                segment_start = offset
+                num_splits += 1
+
+        split_chains.append(chain[segment_start:])
+        split_chain_types.append(residue_types[segment_start:])
+
+    return split_chains, split_chain_types, num_splits
+
+
+def _parent_hmm_match_score_by_node(num_nodes, chains, match_scores):
+    """Propagate pre-pruning parent-chain HMM scores to individual nodes."""
+    scores_by_node = np.ones((int(num_nodes),), dtype=np.float32)
+    if len(chains) != len(match_scores):
+        raise ValueError("protein chains and HMM match scores do not match")
+    for chain, score in zip(chains, match_scores):
+        score = float(score)
+        if not np.isfinite(score):
+            score = 1.0
+        scores_by_node[np.asarray(chain, dtype=np.int32)] = np.clip(score, 0.0, 1.0)
+    return scores_by_node
+
+
+def _prune_low_confidence_short_protein_chains(
+    chains,
+    chain_types,
+    reordered_final_results,
+    parent_hmm_match_score_by_node,
+    *,
+    max_chain_length=SHORT_PROTEIN_CHAIN_MAX_LENGTH,
+    model_confidence_threshold=SHORT_PROTEIN_MODEL_CONFIDENCE_THRESHOLD,
+    residue_type_confidence_threshold=(
+        SHORT_PROTEIN_RESIDUE_TYPE_CONFIDENCE_THRESHOLD
+    ),
+    parent_hmm_score_threshold=SHORT_PROTEIN_PARENT_HMM_SCORE_THRESHOLD,
+    required_low_confidence_votes=SHORT_PROTEIN_LOW_CONFIDENCE_VOTES,
+):
+    """Remove final short protein chains only when multiple signals are weak.
+
+    This helper is intentionally called after final C-N discontinuity splitting.
+    HMM scores come from the pre-pruning parent trace because aggressive HMM
+    pruning makes the local score of nearly every surviving short fragment 1.0.
+    """
+    if len(chains) != len(chain_types):
+        raise ValueError("protein chains and residue-type arrays do not match")
+
+    confidence = np.asarray(reordered_final_results["confidence"], dtype=np.float32)
+    if confidence.ndim > 1:
+        confidence = confidence[:, 0]
+    residue_type_confidence = np.asarray(
+        reordered_final_results["residue_type_confidence"], dtype=np.float32
+    )
+    parent_hmm_match_score_by_node = np.asarray(
+        parent_hmm_match_score_by_node, dtype=np.float32
+    )
+    num_nodes = len(confidence)
+    if not (
+        len(residue_type_confidence) == num_nodes
+        and len(parent_hmm_match_score_by_node) == num_nodes
+    ):
+        raise ValueError("protein confidence arrays do not have the same node count")
+
+    kept_chains = []
+    kept_chain_types = []
+    removed_records = []
+    for chain_index, (chain, residue_types) in enumerate(zip(chains, chain_types)):
+        chain = np.asarray(chain, dtype=np.int32)
+        residue_types = np.asarray(residue_types)
+        if len(chain) != len(residue_types):
+            raise ValueError("protein chain and residue-type lengths do not match")
+
+        remove = False
+        mean_model_confidence = None
+        mean_residue_type_confidence = None
+        mean_parent_hmm_score = None
+        low_confidence_votes = 0
+        if 0 < len(chain) <= int(max_chain_length):
+            mean_model_confidence = float(np.mean(confidence[chain]))
+            mean_residue_type_confidence = float(
+                np.mean(residue_type_confidence[chain])
+            )
+            mean_parent_hmm_score = float(
+                np.mean(parent_hmm_match_score_by_node[chain])
+            )
+            low_confidence_votes = int(
+                mean_model_confidence < float(model_confidence_threshold)
+            ) + int(
+                mean_residue_type_confidence
+                < float(residue_type_confidence_threshold)
+            ) + int(
+                mean_parent_hmm_score < float(parent_hmm_score_threshold)
+            )
+            remove = low_confidence_votes >= int(required_low_confidence_votes)
+
+        if remove:
+            removed_records.append(
+                {
+                    "chain_index": int(chain_index),
+                    "chain_length": int(len(chain)),
+                    "mean_model_confidence": mean_model_confidence,
+                    "mean_residue_type_confidence": mean_residue_type_confidence,
+                    "mean_parent_hmm_match_score": mean_parent_hmm_score,
+                    "low_confidence_votes": int(low_confidence_votes),
+                }
+            )
+        else:
+            kept_chains.append(chain)
+            kept_chain_types.append(residue_types)
+
+    return kept_chains, kept_chain_types, removed_records
+
+
+def _should_try_adaptive_greedy(
+    global_output_residues,
+    protein_nodes_after_existence,
+    *,
+    retention_trigger=0.80,
+):
+    """Detect unusually destructive global tracing/HMM postprocessing."""
+    if protein_nodes_after_existence <= 0:
+        return False
+    return (
+        float(global_output_residues) / float(protein_nodes_after_existence)
+        < float(retention_trigger)
+    )
+
+
+def _should_use_adaptive_greedy(
+    global_output_residues,
+    greedy_output_residues,
+    *,
+    minimum_greedy_gain=0.10,
+):
+    """Use greedy only when it materially restores residues lost by global tracing."""
+    return float(global_output_residues) < (
+        1.0 - float(minimum_greedy_gain)
+    ) * float(greedy_output_residues)
+
+
+def _split_chain_outputs_at_sequence_discontinuities(
+    chains,
+    chain_types,
+    residue_indices,
+    *,
+    split_forward_gaps=True,
+):
+    """Split where HMM sequence registration contradicts a consecutive edge."""
+    split_chains = []
+    split_chain_types = []
+    split_residue_indices = []
+    num_splits = 0
+    for chain, residue_types, sequence_indices in zip(
+        chains, chain_types, residue_indices
+    ):
+        chain = np.asarray(chain, dtype=np.int32)
+        residue_types = np.asarray(residue_types)
+        sequence_indices = np.asarray(sequence_indices, dtype=np.int32)
+        if not (len(chain) == len(residue_types) == len(sequence_indices)):
+            raise ValueError("chain, residue-type, and sequence-index lengths do not match")
+        if len(chain) == 0:
+            continue
+        segment_start = 0
+        for offset in range(1, len(chain)):
+            previous = int(sequence_indices[offset - 1])
+            current = int(sequence_indices[offset])
+            if split_forward_gaps:
+                is_discontinuous = current != previous + 1
+            else:
+                is_discontinuous = current <= previous
+            if previous >= 0 and current >= 0 and is_discontinuous:
+                split_chains.append(chain[segment_start:offset])
+                split_chain_types.append(residue_types[segment_start:offset])
+                split_residue_indices.append(sequence_indices[segment_start:offset])
+                segment_start = offset
+                num_splits += 1
+        split_chains.append(chain[segment_start:])
+        split_chain_types.append(residue_types[segment_start:])
+        split_residue_indices.append(sequence_indices[segment_start:])
+    return split_chains, split_chain_types, split_residue_indices, num_splits
+
+
+def _environment_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None or str(value).strip() == "":
+        return bool(default)
+    return str(value).lower() in {"1", "true", "yes", "on"}
+
+
+def _environment_float(name, default):
+    try:
+        return float(os.environ.get(name, str(default)))
+    except ValueError:
+        return float(default)
+
+
+def _dump_edge_score_diagnostics(
+    output_path,
+    edge_existence_dict,
+    survived_original_indices,
+    prot_mask,
+):
+    sources = []
+    destinations = []
+    probabilities = []
+    for source, destination_map in edge_existence_dict.items():
+        for destination, scores in destination_map.items():
+            score_array = np.asarray(scores, dtype=np.float32).reshape(-1)
+            if score_array.size != 3:
+                continue
+            sources.append(int(source))
+            destinations.append(int(destination))
+            probabilities.append(score_array)
+    np.savez_compressed(
+        output_path,
+        source_original_index=np.asarray(sources, dtype=np.int32),
+        destination_original_index=np.asarray(destinations, dtype=np.int32),
+        probabilities=np.asarray(probabilities, dtype=np.float32).reshape(-1, 3),
+        survived_original_indices=np.asarray(survived_original_indices, dtype=np.int32),
+        protein_mask_after_existence=np.asarray(prot_mask, dtype=bool),
+    )
+    print(f"# Output edge-score diagnostics to {output_path}")
 
 
 def _disable_na_pp_rescue() -> bool:
@@ -502,15 +778,25 @@ def _build_protein_chain_outputs(
     hmm_temp_dir,
     dummy_atom_pos,
 ):
+    num_nodes = len(reordered_final_results["pred_aatype"])
     if len(prot_chains) == 0:
-        return [], [], [], []
+        return [], [], [], [], [], [], np.ones((num_nodes,), dtype=np.float32)
 
     if len(prot_seqs) == 0:
         chains_res_type = [
             np.argmax(reordered_final_results["pred_aatype"][chain][..., :num_prot], axis=-1)
             for chain in prot_chains
         ]
-        return prot_chains, chains_res_type, prot_chains, chains_res_type
+        residue_indices = [np.arange(len(chain), dtype=np.int32) for chain in prot_chains]
+        return (
+            prot_chains,
+            chains_res_type,
+            residue_indices,
+            prot_chains,
+            chains_res_type,
+            residue_indices,
+            np.ones((num_nodes,), dtype=np.float32),
+        )
 
     # Keep CA positions in the same global index space as `prot_chains`.
     ca_pos = dummy_atom_pos[..., 1, :]
@@ -541,6 +827,15 @@ def _build_protein_chain_outputs(
 
     before_chains = fix_chains_output.chains
     before_chain_types = fix_chains_output.best_match_output.new_sequences
+    before_residue_indices = [
+        np.asarray(indices, dtype=np.int32).copy()
+        for indices in fix_chains_output.best_match_output.residue_idxs
+    ]
+    parent_hmm_match_score_by_node = _parent_hmm_match_score_by_node(
+        num_nodes,
+        before_chains,
+        fix_chains_output.best_match_output.match_scores,
+    )
 
     after_fix_chains_output = prune_and_connect_chains(
         chains=fix_chains_output.chains,
@@ -553,8 +848,11 @@ def _build_protein_chain_outputs(
     return (
         before_chains,
         before_chain_types,
+        before_residue_indices,
         after_fix_chains_output.chains,
         after_fix_chains_output.best_match_output.new_sequences,
+        after_fix_chains_output.best_match_output.residue_idxs,
+        parent_hmm_match_score_by_node,
     )
 
 
@@ -2096,7 +2394,7 @@ def final_results_align_to_sequence_beam_protein(
     pred_atom_mask = pred_atom_mask[existence_mask]
     prot_mask = prot_mask_full[existence_mask]
     confidence = confidence[existence_mask]
-    survived_original_indices = np.nonzero(existence_mask)[0].astype(np.int32)
+    survived_original_indices = _surviving_original_indices(existence_mask)
 
     reordered_final_results = {}
     for key, value in working_results.items():
@@ -2415,6 +2713,7 @@ def final_results_align_to_sequence(
     na_aa_logits_data=None,
     force_protein_mode=False,
     force_na_mode=False,
+    prune_low_confidence_short_protein_chains=False,
 ):
     out_dir = abspath(output_dir)
     hmm_temp_dir = pjoin(out_dir, "hmm")
@@ -2557,6 +2856,8 @@ def final_results_align_to_sequence(
     )
     print("# Raw all residues before existence filter = {}".format(len(pred_atom_pos)))
 
+    survived_original_indices = _surviving_original_indices(existence_mask)
+
     pred_atom_pos = pred_atom_pos[existence_mask]
     pred_atom_mask = pred_atom_mask[existence_mask]
 
@@ -2582,26 +2883,79 @@ def final_results_align_to_sequence(
         residue_type_scores_after_existence_filter_path,
         reordered_final_results,
     )
+    _dump_edge_score_diagnostics(
+        os.path.join(out_dir, "protein_edge_scores.npz"),
+        final_results["pred_edge_existence_dict"],
+        survived_original_indices,
+        prot_mask,
+    )
 
     prot_chains = []
+    protein_trace_backend = os.environ.get(
+        "EM3DFOLD_PROTEIN_TRACE_BACKEND", "global_path_cover"
+    ).strip().lower()
+    assignment_backend = "n/a"
+    use_reciprocal_edges = _environment_flag(
+        "EM3DFOLD_RECIPROCAL_EDGE_SCORE",
+        default=False,
+    )
+    protein_bond_distance_threshold = _environment_float(
+        "EM3DFOLD_PROTEIN_BOND_DISTANCE_THRESHOLD", 1.50
+    )
+    protein_indices_after_existence = np.flatnonzero(prot_mask)
+    protein_original_indices = survived_original_indices[prot_mask]
     if has_protein_input and np.any(prot_mask):
-        idx_exist_to_original = np.arange(len(pred_atom_pos), dtype=np.int32)[prot_mask]
-        traced = flood_fill_with_edge_dual(
-            pred_atom_pos[prot_mask],
-            confidence[prot_mask],
-            bond_distance_threshold=2.1,
-            last_idx=2,
-            next_idx=0,
-            edge_existence_dict=final_results["pred_edge_existence_dict"],
-            idx_exist_to_original=idx_exist_to_original,
+        if protein_trace_backend == "global_path_cover":
+            minimum_edge_score = _environment_float(
+                "EM3DFOLD_GLOBAL_EDGE_MIN_SCORE", 0.60
+            )
+            assignment_backend = os.environ.get(
+                "EM3DFOLD_GLOBAL_ASSIGNMENT_BACKEND", "sparse"
+            ).strip().lower()
+            assignment_objective = os.environ.get(
+                "EM3DFOLD_GLOBAL_ASSIGNMENT_OBJECTIVE", "penalized"
+            ).strip().lower()
+            edge_score_mode = os.environ.get(
+                "EM3DFOLD_GLOBAL_EDGE_SCORE_MODE", "reciprocal_probability"
+            ).strip().lower()
+            geometry_weight = _environment_float(
+                "EM3DFOLD_GLOBAL_GEOMETRY_WEIGHT", 0.0
+            )
+            traced = global_path_cover_with_edge_dual_protein(
+                pred_atom_pos[prot_mask],
+                final_results["pred_edge_existence_dict"],
+                protein_original_indices,
+                bond_distance_threshold=protein_bond_distance_threshold,
+                edge_score_mode=edge_score_mode,
+                geometry_weight=geometry_weight,
+                minimum_edge_score=minimum_edge_score,
+                assignment_backend=assignment_backend,
+                assignment_objective=assignment_objective,
+            )
+        else:
+            traced = flood_fill_with_edge_dual(
+                pred_atom_pos[prot_mask],
+                confidence[prot_mask],
+                bond_distance_threshold=protein_bond_distance_threshold,
+                last_idx=2,
+                next_idx=0,
+                edge_existence_dict=final_results["pred_edge_existence_dict"],
+                idx_exist_to_original=protein_original_indices,
+                use_reciprocal_edges=use_reciprocal_edges,
+            )
+        prot_chains = [protein_indices_after_existence[c] for c in traced]
+        print(
+            "# Trace protein into {} dummy chains (backend={} assignment_backend={} reciprocal_edge_score={})".format(
+                len(prot_chains),
+                protein_trace_backend,
+                assignment_backend,
+                use_reciprocal_edges,
+            )
         )
-        idxs = np.arange(len(pred_atom_pos))[prot_mask]
-        prot_chains = [idxs[c] for c in traced]
-        print(f"# Trace protein into {len(prot_chains)} dummy chains")
 
     na_chains = []
     if has_na_input and np.any(na_mask):
-        idx_exist_to_original = np.arange(len(pred_atom_pos), dtype=np.int32)[na_mask]
+        idx_exist_to_original = survived_original_indices[na_mask]
         traced = flood_fill_with_edge_dual(
             pred_atom_pos[na_mask],
             confidence[na_mask],
@@ -2618,8 +2972,11 @@ def final_results_align_to_sequence(
     (
         prot_before_chains,
         prot_before_chain_types,
+        prot_before_residue_indices,
         prot_after_chains,
         prot_after_chain_types,
+        prot_after_residue_indices,
+        prot_parent_hmm_match_score_by_node,
     ) = _build_protein_chain_outputs(
         reordered_final_results,
         prot_chains,
@@ -2627,6 +2984,233 @@ def final_results_align_to_sequence(
         hmm_temp_dir,
         pred_atom_pos,
     )
+
+    adaptive_greedy_enabled = _environment_flag(
+        "EM3DFOLD_ADAPTIVE_GREEDY_FALLBACK",
+        default=True,
+    )
+    adaptive_retention_trigger = _environment_float(
+        "EM3DFOLD_ADAPTIVE_RETENTION_TRIGGER", 0.80
+    )
+    adaptive_minimum_greedy_gain = _environment_float(
+        "EM3DFOLD_ADAPTIVE_MINIMUM_GREEDY_GAIN", 0.10
+    )
+    global_after_residues = int(sum(len(chain) for chain in prot_after_chains))
+    adaptive_greedy_triggered = False
+    adaptive_greedy_selected = False
+    adaptive_greedy_residues = None
+    if (
+        adaptive_greedy_enabled
+        and protein_trace_backend == "global_path_cover"
+        and has_protein_input
+        and np.any(prot_mask)
+        and _should_try_adaptive_greedy(
+            global_after_residues,
+            int(np.sum(prot_mask)),
+            retention_trigger=adaptive_retention_trigger,
+        )
+    ):
+        adaptive_greedy_triggered = True
+        try:
+            greedy_local_chains = flood_fill_with_edge_dual(
+                pred_atom_pos[prot_mask],
+                confidence[prot_mask],
+                bond_distance_threshold=protein_bond_distance_threshold,
+                last_idx=2,
+                next_idx=0,
+                edge_existence_dict=final_results["pred_edge_existence_dict"],
+                idx_exist_to_original=protein_original_indices,
+                use_reciprocal_edges=False,
+            )
+            greedy_chains = [
+                protein_indices_after_existence[chain]
+                for chain in greedy_local_chains
+            ]
+            (
+                _greedy_before_chains,
+                _greedy_before_chain_types,
+                _greedy_before_residue_indices,
+                greedy_after_chains,
+                greedy_after_chain_types,
+                greedy_after_residue_indices,
+                greedy_parent_hmm_match_score_by_node,
+            ) = _build_protein_chain_outputs(
+                reordered_final_results,
+                greedy_chains,
+                prot_seqs,
+                os.path.join(hmm_temp_dir, "adaptive_greedy"),
+                pred_atom_pos,
+            )
+            adaptive_greedy_residues = int(
+                sum(len(chain) for chain in greedy_after_chains)
+            )
+            if _should_use_adaptive_greedy(
+                global_after_residues,
+                adaptive_greedy_residues,
+                minimum_greedy_gain=adaptive_minimum_greedy_gain,
+            ):
+                # Keep the global before-prune result as the recycle state.  The
+                # fallback changes only the user-visible post-pruning output.
+                prot_after_chains = greedy_after_chains
+                prot_after_chain_types = greedy_after_chain_types
+                prot_after_residue_indices = greedy_after_residue_indices
+                prot_parent_hmm_match_score_by_node = (
+                    greedy_parent_hmm_match_score_by_node
+                )
+                adaptive_greedy_selected = True
+            print(
+                "# Adaptive greedy fallback: global_residues={} greedy_residues={} "
+                "selected={}".format(
+                    global_after_residues,
+                    adaptive_greedy_residues,
+                    adaptive_greedy_selected,
+                )
+            )
+        except Exception as error:
+            print(
+                "# WARNING: adaptive greedy fallback failed; retain global output: "
+                "{}".format(error)
+            )
+
+    use_sequence_splits = _environment_flag(
+        "EM3DFOLD_SPLIT_SEQUENCE_DISCONTINUITIES",
+        default=False,
+    )
+    num_before_sequence_splits = 0
+    num_after_sequence_splits = 0
+    if use_sequence_splits:
+        (
+            prot_before_chains,
+            prot_before_chain_types,
+            prot_before_residue_indices,
+            num_before_sequence_splits,
+        ) = _split_chain_outputs_at_sequence_discontinuities(
+            prot_before_chains,
+            prot_before_chain_types,
+            prot_before_residue_indices,
+        )
+        (
+            prot_after_chains,
+            prot_after_chain_types,
+            prot_after_residue_indices,
+            num_after_sequence_splits,
+        ) = _split_chain_outputs_at_sequence_discontinuities(
+            prot_after_chains,
+            prot_after_chain_types,
+            prot_after_residue_indices,
+        )
+        print(
+            "# Split protein sequence discontinuities: before_prune={} after_prune={}".format(
+                num_before_sequence_splits,
+                num_after_sequence_splits,
+            )
+        )
+
+    _write_json(
+        os.path.join(out_dir, "protein_trace_diagnostics.json"),
+        {
+            "protein_trace_backend": os.environ.get(
+                "EM3DFOLD_PROTEIN_TRACE_BACKEND", "global_path_cover"
+            ).strip().lower(),
+            "global_edge_min_score": _environment_float(
+                "EM3DFOLD_GLOBAL_EDGE_MIN_SCORE", 0.60
+            ),
+            "global_assignment_backend": os.environ.get(
+                "EM3DFOLD_GLOBAL_ASSIGNMENT_BACKEND", "sparse"
+            ).strip().lower(),
+            "global_assignment_objective": os.environ.get(
+                "EM3DFOLD_GLOBAL_ASSIGNMENT_OBJECTIVE", "penalized"
+            ).strip().lower(),
+            "global_edge_score_mode": os.environ.get(
+                "EM3DFOLD_GLOBAL_EDGE_SCORE_MODE", "reciprocal_probability"
+            ).strip().lower(),
+            "global_geometry_weight": _environment_float(
+                "EM3DFOLD_GLOBAL_GEOMETRY_WEIGHT", 0.0
+            ),
+            "protein_bond_distance_threshold": _environment_float(
+                "EM3DFOLD_PROTEIN_BOND_DISTANCE_THRESHOLD", 1.50
+            ),
+            "adaptive_greedy_enabled": adaptive_greedy_enabled,
+            "adaptive_retention_trigger": adaptive_retention_trigger,
+            "adaptive_minimum_greedy_gain": adaptive_minimum_greedy_gain,
+            "adaptive_greedy_triggered": adaptive_greedy_triggered,
+            "adaptive_greedy_selected": adaptive_greedy_selected,
+            "global_after_prune_residues": global_after_residues,
+            "adaptive_greedy_after_prune_residues": adaptive_greedy_residues,
+            "reciprocal_edge_score": _environment_flag(
+                "EM3DFOLD_RECIPROCAL_EDGE_SCORE", default=False
+            ),
+            "sequence_discontinuity_splits": use_sequence_splits,
+            "before_prune": [
+                {
+                    "node_indices_after_existence": np.asarray(chain, dtype=np.int32).tolist(),
+                    "sequence_indices": np.asarray(sequence_indices, dtype=np.int32).tolist(),
+                }
+                for chain, sequence_indices in zip(
+                    prot_before_chains, prot_before_residue_indices
+                )
+            ],
+            "after_prune": [
+                {
+                    "node_indices_after_existence": np.asarray(chain, dtype=np.int32).tolist(),
+                    "sequence_indices": np.asarray(sequence_indices, dtype=np.int32).tolist(),
+                }
+                for chain, sequence_indices in zip(
+                    prot_after_chains, prot_after_residue_indices
+                )
+            ],
+        },
+    )
+    prot_before_chains, prot_before_chain_types, num_before_splits = (
+        _split_chain_outputs_at_backbone_discontinuities(
+            prot_before_chains,
+            prot_before_chain_types,
+            pred_atom_pos,
+        )
+    )
+    prot_after_chains, prot_after_chain_types, num_after_splits = (
+        _split_chain_outputs_at_backbone_discontinuities(
+            prot_after_chains,
+            prot_after_chain_types,
+            pred_atom_pos,
+        )
+    )
+    if num_before_splits or num_after_splits:
+        print(
+            "# Split protein backbone discontinuities: before_prune={} after_prune={}".format(
+                num_before_splits,
+                num_after_splits,
+            )
+        )
+
+    short_protein_pruning_records = []
+    if prune_low_confidence_short_protein_chains:
+        protein_residues_before_short_pruning = int(
+            sum(len(chain) for chain in prot_after_chains)
+        )
+        prot_after_chains, prot_after_chain_types, short_protein_pruning_records = (
+            _prune_low_confidence_short_protein_chains(
+                prot_after_chains,
+                prot_after_chain_types,
+                reordered_final_results,
+                prot_parent_hmm_match_score_by_node,
+            )
+        )
+        removed_residues = int(
+            sum(record["chain_length"] for record in short_protein_pruning_records)
+        )
+        print(
+            "# Confidence-aware short protein-chain pruning: "
+            "enabled=True chains_removed={} residues_removed={} "
+            "residues_before={} residues_after={}".format(
+                len(short_protein_pruning_records),
+                removed_residues,
+                protein_residues_before_short_pruning,
+                protein_residues_before_short_pruning - removed_residues,
+            )
+        )
+    else:
+        print("# Confidence-aware short protein-chain pruning: enabled=False")
     (
         na_before_chains,
         na_before_chain_types,
@@ -2790,6 +3374,25 @@ def final_results_align_to_sequence(
     next_round_state = before_prune_state if before_prune_path is not None else output_state
     protein_after_num_res = int(sum(len(chain) for chain in prot_after_chains))
     na_after_num_res = int(sum(len(chain) for chain in na_after_chains))
+    if protein_after_num_res > 0:
+        protein_after_indices = np.concatenate(prot_after_chains).astype(np.int32)
+        protein_after_mean_confidence = float(
+            np.mean(reordered_final_results["confidence"][protein_after_indices, 0])
+        )
+        protein_after_mean_residue_type_confidence = float(
+            np.mean(
+                reordered_final_results["residue_type_confidence"][
+                    protein_after_indices
+                ]
+            )
+        )
+    else:
+        protein_after_mean_confidence = 0.0
+        protein_after_mean_residue_type_confidence = 0.0
+    protein_after_quality = 0.5 * (
+        protein_after_mean_confidence
+        + protein_after_mean_residue_type_confidence
+    )
     return {
         "output_path": fpdbout,
         "output_entropy_score_path": entropy_output_path,
@@ -2805,6 +3408,18 @@ def final_results_align_to_sequence(
         "na_before_prune_path": na_before_prune_path,
         "na_after_prune_path": na_after_prune_path,
         "protein_after_num_res": protein_after_num_res,
+        "protein_after_mean_confidence": protein_after_mean_confidence,
+        "protein_after_mean_residue_type_confidence": protein_after_mean_residue_type_confidence,
+        "protein_after_quality": protein_after_quality,
+        "protein_short_chain_confidence_pruning_enabled": bool(
+            prune_low_confidence_short_protein_chains
+        ),
+        "protein_short_chain_confidence_pruned_chains": int(
+            len(short_protein_pruning_records)
+        ),
+        "protein_short_chain_confidence_pruned_residues": int(
+            sum(record["chain_length"] for record in short_protein_pruning_records)
+        ),
         "na_after_num_res": na_after_num_res,
         "before_prune_state": before_prune_state,
         "output_state": output_state,

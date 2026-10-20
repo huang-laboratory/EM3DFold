@@ -108,6 +108,15 @@ def prepare_common_args(parser):
         default=3,
         help="Minimum NA backbone-chain length kept in final outputs",
     )
+    parser.add_argument(
+        "--prune-low-confidence-short-protein-chains",
+        action="store_true",
+        help=(
+            "After final protein C-N splitting, remove chains of length <=5 "
+            "when at least two validated confidence signals are low "
+            "(default: disabled)"
+        ),
+    )
     parser.set_defaults(fallback_to_predicted_na_types=True)
     parser.add_argument(
         "--no-fallback-to-predicted-na-types",
@@ -637,6 +646,9 @@ def run_inference_loop(args, model_class, model_args, run_inference_fn):
         na_aa_logits_data=postprocess_na_aa_logits_data,
         force_protein_mode=getattr(args, "force_protein_mode", False),
         force_na_mode=getattr(args, "force_na_mode", False),
+        prune_low_confidence_short_protein_chains=getattr(
+            args, "prune_low_confidence_short_protein_chains", False
+        ),
     )
     if getattr(args, "extra_protein_trace_backend", "none") == "beam":
         beam_output_info = final_results_align_to_sequence_beam_protein(
@@ -703,6 +715,7 @@ def run_main(args, model_class, model_args, run_inference_fn):
     last_protein_after_num_res = -1
     last_na_after_prune_path = None
     last_na_entropy_path = None
+    protein_selection_candidates = []
 
     for i in range(n_round_refine):
         args.no_use_random_affine = i != 0
@@ -732,6 +745,30 @@ def run_main(args, model_class, model_args, run_inference_fn):
             last_protein_after_prune_path = protein_after_path
             last_protein_entropy_path = protein_entropy_output_path
             last_protein_after_num_res = protein_after_num_res
+            if i >= 2:
+                protein_selection_candidates.append(
+                    {
+                        "recycle": i,
+                        "path": protein_after_path,
+                        "entropy_path": protein_entropy_output_path,
+                        "num_res": protein_after_num_res,
+                        "quality": float(
+                            output_info.get("protein_after_quality", 0.0) or 0.0
+                        ),
+                        "mean_confidence": float(
+                            output_info.get(
+                                "protein_after_mean_confidence", 0.0
+                            )
+                            or 0.0
+                        ),
+                        "mean_residue_type_confidence": float(
+                            output_info.get(
+                                "protein_after_mean_residue_type_confidence", 0.0
+                            )
+                            or 0.0
+                        ),
+                    }
+                )
         if i < 2 and protein_after_path is not None:
             print(
                 "# Skip best_so_far_protein update at recycle_{}; only consider rounds with index >= 2".format(
@@ -787,6 +824,41 @@ def run_main(args, model_class, model_args, run_inference_fn):
     selected_protein_path = best_so_far_protein_path
     selected_protein_entropy_path = best_so_far_protein_entropy_path
     selected_protein_num_res = best_so_far_protein_num_res
+    recycle_selection_mode = os.environ.get(
+        "EM3DFOLD_RECYCLE_SELECTION", "confidence"
+    ).strip().lower()
+    if recycle_selection_mode == "confidence" and protein_selection_candidates:
+        max_num_res = max(candidate["num_res"] for candidate in protein_selection_candidates)
+        try:
+            min_residue_ratio = float(
+                os.environ.get("EM3DFOLD_RECYCLE_MIN_RESIDUE_RATIO", "0.95")
+            )
+        except ValueError:
+            min_residue_ratio = 0.95
+        eligible_candidates = [
+            candidate
+            for candidate in protein_selection_candidates
+            if candidate["num_res"] >= min_residue_ratio * max_num_res
+        ]
+        selected_candidate = max(
+            eligible_candidates,
+            key=lambda candidate: (candidate["quality"], candidate["num_res"]),
+        )
+        selected_protein_path = selected_candidate["path"]
+        selected_protein_entropy_path = selected_candidate["entropy_path"]
+        selected_protein_num_res = selected_candidate["num_res"]
+        print(
+            "# Confidence-aware recycle selection: recycle={} residues={} quality={:.4f} "
+            "mean_confidence={:.4f} mean_residue_type_confidence={:.4f} "
+            "min_residue_ratio={:.3f}".format(
+                selected_candidate["recycle"],
+                selected_candidate["num_res"],
+                selected_candidate["quality"],
+                selected_candidate["mean_confidence"],
+                selected_candidate["mean_residue_type_confidence"],
+                min_residue_ratio,
+            )
+        )
     if selected_protein_path is None and last_protein_after_prune_path is not None:
         selected_protein_path = last_protein_after_prune_path
         selected_protein_entropy_path = last_protein_entropy_path
@@ -838,4 +910,3 @@ def run_main(args, model_class, model_args, run_inference_fn):
             print(f"# Final entropy NA source = {last_na_entropy_path}")
 
     print("# Done all rounds")
-
