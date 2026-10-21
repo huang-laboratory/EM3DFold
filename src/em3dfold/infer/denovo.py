@@ -40,6 +40,45 @@ def _surviving_original_indices(existence_mask: np.ndarray) -> np.ndarray:
     return np.flatnonzero(np.asarray(existence_mask, dtype=bool)).astype(np.int32)
 
 
+def _trace_na_chains_local(
+    pred_atom_pos,
+    confidence,
+    na_mask,
+    edge_existence_dict,
+    survived_original_indices,
+):
+    """Run main-compatible local NA tracing with only the two index fixes.
+
+    NA intentionally does not use protein global path-cover, reciprocal scoring,
+    adaptive fallback, or protein post-tracing splits/pruning. Compared with main,
+    the shared local tracer uses the corrected NEXT/PREV classes, and this wrapper
+    maps existence-filtered rows back to their original edge-dictionary indices.
+    """
+    na_mask = np.asarray(na_mask, dtype=bool)
+    survived_original_indices = np.asarray(
+        survived_original_indices, dtype=np.int32
+    )
+    if len(na_mask) != len(survived_original_indices):
+        raise ValueError("NA mask and surviving-index map must have the same length")
+
+    na_indices_after_existence = np.flatnonzero(na_mask)
+    na_original_indices = survived_original_indices[na_mask]
+    traced = flood_fill_with_edge_dual(
+        pred_atom_pos[na_mask],
+        confidence[na_mask],
+        bond_distance_threshold=3.6,
+        last_idx=6,
+        next_idx=8,
+        edge_existence_dict=edge_existence_dict,
+        idx_exist_to_original=na_original_indices,
+        use_reciprocal_edges=False,
+    )
+    return [
+        na_indices_after_existence[np.asarray(chain, dtype=np.int32)]
+        for chain in traced
+    ]
+
+
 def _split_chain_outputs_at_backbone_discontinuities(
     chains,
     chain_types,
@@ -2955,18 +2994,13 @@ def final_results_align_to_sequence(
 
     na_chains = []
     if has_na_input and np.any(na_mask):
-        idx_exist_to_original = survived_original_indices[na_mask]
-        traced = flood_fill_with_edge_dual(
-            pred_atom_pos[na_mask],
-            confidence[na_mask],
-            bond_distance_threshold=3.6,
-            last_idx=6,
-            next_idx=8,
-            edge_existence_dict=final_results["pred_edge_existence_dict"],
-            idx_exist_to_original=idx_exist_to_original,
+        na_chains = _trace_na_chains_local(
+            pred_atom_pos,
+            confidence,
+            na_mask,
+            final_results["pred_edge_existence_dict"],
+            survived_original_indices,
         )
-        idxs = np.arange(len(pred_atom_pos))[na_mask]
-        na_chains = [idxs[c] for c in traced]
         print(f"# Trace NA into {len(na_chains)} dummy chains")
 
     (
@@ -3183,18 +3217,30 @@ def final_results_align_to_sequence(
             )
         )
 
+    prot_before_final_prune_chains = [
+        np.asarray(chain, dtype=np.int32).copy() for chain in prot_after_chains
+    ]
+    prot_before_final_prune_chain_types = [
+        np.asarray(chain_types).copy() for chain_types in prot_after_chain_types
+    ]
+    prot_after_final_prune_chains = [chain.copy() for chain in prot_before_final_prune_chains]
+    prot_after_final_prune_chain_types = [
+        chain_types.copy() for chain_types in prot_before_final_prune_chain_types
+    ]
     short_protein_pruning_records = []
     if prune_low_confidence_short_protein_chains:
         protein_residues_before_short_pruning = int(
-            sum(len(chain) for chain in prot_after_chains)
+            sum(len(chain) for chain in prot_before_final_prune_chains)
         )
-        prot_after_chains, prot_after_chain_types, short_protein_pruning_records = (
-            _prune_low_confidence_short_protein_chains(
-                prot_after_chains,
-                prot_after_chain_types,
-                reordered_final_results,
-                prot_parent_hmm_match_score_by_node,
-            )
+        (
+            prot_after_final_prune_chains,
+            prot_after_final_prune_chain_types,
+            short_protein_pruning_records,
+        ) = _prune_low_confidence_short_protein_chains(
+            prot_before_final_prune_chains,
+            prot_before_final_prune_chain_types,
+            reordered_final_results,
+            prot_parent_hmm_match_score_by_node,
         )
         removed_residues = int(
             sum(record["chain_length"] for record in short_protein_pruning_records)
@@ -3235,6 +3281,10 @@ def final_results_align_to_sequence(
     protein_after_prune_path = None
     na_before_prune_path = None
     na_after_prune_path = None
+    protein_before_final_prune_path = None
+    protein_after_final_prune_path = None
+    before_final_prune_path = None
+    after_final_prune_path = None
     if len(prot_before_chains) > 0:
         _print_chain_stats("Protein before prune", prot_before_chains)
         protein_before_prune_path = os.path.join(out_dir, "protein_before_prune.cif")
@@ -3274,6 +3324,57 @@ def final_results_align_to_sequence(
             na_after_chains,
             na_after_chain_types,
         )
+
+    if prune_low_confidence_short_protein_chains:
+        if len(prot_before_final_prune_chains) > 0:
+            protein_before_final_prune_path = os.path.join(
+                out_dir, "protein_before_final_prune.cif"
+            )
+            _write_chain_file(
+                protein_before_final_prune_path,
+                reordered_final_results,
+                prot_before_final_prune_chains,
+                prot_before_final_prune_chain_types,
+            )
+        if len(prot_after_final_prune_chains) > 0:
+            protein_after_final_prune_path = os.path.join(
+                out_dir, "protein_after_final_prune.cif"
+            )
+            _write_chain_file(
+                protein_after_final_prune_path,
+                reordered_final_results,
+                prot_after_final_prune_chains,
+                prot_after_final_prune_chain_types,
+            )
+
+        all_before_final_prune_chains = list(prot_before_final_prune_chains) + list(
+            na_after_chains
+        )
+        all_before_final_prune_chain_types = list(
+            prot_before_final_prune_chain_types
+        ) + list(na_after_chain_types)
+        all_after_final_prune_chains = list(prot_after_final_prune_chains) + list(
+            na_after_chains
+        )
+        all_after_final_prune_chain_types = list(
+            prot_after_final_prune_chain_types
+        ) + list(na_after_chain_types)
+        if len(all_before_final_prune_chains) > 0:
+            before_final_prune_path = os.path.join(out_dir, "before_final_prune.cif")
+            _write_chain_file(
+                before_final_prune_path,
+                reordered_final_results,
+                all_before_final_prune_chains,
+                all_before_final_prune_chain_types,
+            )
+        if len(all_after_final_prune_chains) > 0:
+            after_final_prune_path = os.path.join(out_dir, "after_final_prune.cif")
+            _write_chain_file(
+                after_final_prune_path,
+                reordered_final_results,
+                all_after_final_prune_chains,
+                all_after_final_prune_chain_types,
+            )
 
     profile_root_dir = _resolve_chain_hmm_profile_dir()
     if profile_root_dir is not None:
@@ -3367,12 +3468,34 @@ def final_results_align_to_sequence(
         all_chain_types,
         bfactor_key="entropy_score_bfactor",
     )
+    after_final_prune_entropy_score_path = None
+    if prune_low_confidence_short_protein_chains:
+        all_after_final_prune_chains = list(prot_after_final_prune_chains) + list(
+            na_after_chains
+        )
+        all_after_final_prune_chain_types = list(
+            prot_after_final_prune_chain_types
+        ) + list(na_after_chain_types)
+        if len(all_after_final_prune_chains) > 0:
+            after_final_prune_entropy_score_path = os.path.join(
+                out_dir, "after_final_prune_entropy_score.cif"
+            )
+            _write_chain_file(
+                after_final_prune_entropy_score_path,
+                entropy_final_results,
+                all_after_final_prune_chains,
+                all_after_final_prune_chain_types,
+                bfactor_key="entropy_score_bfactor",
+            )
     output_state = _build_chain_order_recycle_state(
         reordered_final_results,
         all_chains,
     )
     next_round_state = before_prune_state if before_prune_path is not None else output_state
     protein_after_num_res = int(sum(len(chain) for chain in prot_after_chains))
+    protein_after_final_prune_num_res = int(
+        sum(len(chain) for chain in prot_after_final_prune_chains)
+    )
     na_after_num_res = int(sum(len(chain) for chain in na_after_chains))
     if protein_after_num_res > 0:
         protein_after_indices = np.concatenate(prot_after_chains).astype(np.int32)
@@ -3405,9 +3528,15 @@ def final_results_align_to_sequence(
         "residue_type_scores_after_existence_filter_path": residue_type_scores_after_existence_filter_path,
         "protein_before_prune_path": protein_before_prune_path,
         "protein_after_prune_path": protein_after_prune_path,
+        "protein_before_final_prune_path": protein_before_final_prune_path,
+        "protein_after_final_prune_path": protein_after_final_prune_path,
+        "before_final_prune_path": before_final_prune_path,
+        "after_final_prune_path": after_final_prune_path,
+        "after_final_prune_entropy_score_path": after_final_prune_entropy_score_path,
         "na_before_prune_path": na_before_prune_path,
         "na_after_prune_path": na_after_prune_path,
         "protein_after_num_res": protein_after_num_res,
+        "protein_after_final_prune_num_res": protein_after_final_prune_num_res,
         "protein_after_mean_confidence": protein_after_mean_confidence,
         "protein_after_mean_residue_type_confidence": protein_after_mean_residue_type_confidence,
         "protein_after_quality": protein_after_quality,
