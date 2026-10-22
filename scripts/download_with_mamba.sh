@@ -7,7 +7,9 @@ MAMBA_EXE="${MAMBA_EXE:-mamba}"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   cat <<'EOF'
-Usage: bash scripts/download_with_mamba.sh DOWNLOAD_ROOT
+Usage: bash scripts/download_with_mamba.sh DOWNLOAD_ROOT [--source official|huanglab] [--debug]
+
+--debug is only valid with --source huanglab.
 
 Optional environment variables:
   MAMBA_EXE             Mamba executable (default: mamba from PATH)

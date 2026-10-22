@@ -38,9 +38,10 @@ EM3DFold 是一款从冷冻电镜密度图中自动构建蛋白质、RNA 和 DNA
 向 AI 编程 Agent 提供终端访问权限，然后复制以下提示词，并按需替换路径。
 
 ```text
-1. 请从 https://github.com/huang-laboratory/EM3DFold 安装 EM3DFold，并完整测试一个任务。
-2. 请创建一个兼容 Python 软件包版本的全新隔离环境，不要修改系统 CUDA/驱动，也不要覆盖已有环境和结果。
-3. 请下载预训练权重、验证软件包导入是否正常，然后运行 README 中的一个示例，并报告命令、环境、运行时间、GPU 峰值显存和输出结果。
+1. （可选）检查系统中是否已有可用的 Miniconda3/conda；如果没有，请先安装与当前操作系统和 glibc 兼容的 Miniconda 版本。
+2. 请从 https://github.com/huang-laboratory/EM3DFold 安装 EM3DFold，并完整测试一个任务。
+3. 请创建一个兼容 Python 软件包版本的全新隔离环境，不要修改系统 CUDA/驱动，也不要覆盖已有环境和结果。
+4. 请下载预训练权重、验证软件包导入是否正常，然后运行 README 中的一个示例，并报告命令、环境、运行时间、GPU 峰值显存和输出结果。
 ```
 
 ## 安装
@@ -67,7 +68,10 @@ cd EM3DFold-main
 
 #### 2A. 使用 Conda 安装
 
-如果系统中没有 `conda`，请先安装 [Miniconda](https://docs.conda.io/en/latest/miniconda.html)、Miniforge 或 Anaconda。然后在 EM3DFold 目录中创建 `em3dfold` 环境并安装 EM3DFold：
+如果系统中没有 `conda`，请先安装 [Miniconda](https://www.anaconda.com/docs/getting-started/miniconda/install/linux-install)、Miniforge 或 Anaconda。然后在 EM3DFold 目录中创建 `em3dfold` 环境并安装 EM3DFold：
+
+> [!NOTE]
+> 上述 Miniconda 页面默认安装最新版本，而最新的 Linux 安装器要求 `glibc >= 2.28`。一些较老的系统（例如 CentOS 7）通常只提供 `glibc 2.17`。在这些系统上，建议从 [Miniconda 安装器归档](https://repo.anaconda.com/miniconda/)中选择旧版本。我们已在 CentOS 7 上成功测试 [Miniconda3-py310_24.11.1-0-Linux-x86_64.sh](https://repo.anaconda.com/miniconda/Miniconda3-py310_24.11.1-0-Linux-x86_64.sh)，可将其作为一个兼容选项。
 
 ```bash
 bash scripts/install.sh
@@ -116,6 +120,14 @@ bash scripts/install_with_mamba.sh
 bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/
 "${MAMBA_EXE:-mamba}" run --prefix "$EM3DFOLD_ENV_PREFIX" em3dfold --help
 ```
+
+> [!NOTE]
+> 默认情况下，下载命令使用 `official` 下载源（`Zenodo` 和 `fbaipublicfiles`），在某些地区速度可能较慢。如果下载过慢，可以尝试 `huanglab` 源：
+> ```bash
+> bash scripts/download.sh /path/to/save/pretrained/weights/ --source huanglab
+> # 使用 Mamba 时：
+> bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/ --source huanglab
+> ```
 
 > [!NOTE]
 > 如果你熟悉 Conda/Mamba/pip/shell，或者运行脚本时遇到问题，可以逐步执行 `install.sh` 或 `install_with_mamba.sh` 中的命令。如果下载失败，请手动下载权重。如果脚本没有成功设置 `EM_WEIGHTS_DIR`，请手动设置：
