@@ -4,14 +4,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOWNLOAD_ROOT="${1:-}"
+DOWNLOAD_SOURCE="official"
+DEBUG_DOWNLOAD=false
 MODEL_WEIGHTS_DIR="${DOWNLOAD_ROOT}/weights"
 LM_WEIGHTS_DIR="${DOWNLOAD_ROOT}/lm_weights"
-
-# Override EM3DFOLD_WEIGHTS_URL if your hosted EM3DFold weights tarball uses a different path.
-EM3DFOLD_WEIGHTS_URL="${EM3DFOLD_WEIGHTS_URL:-http://huanglab.phys.hust.edu.cn/EM3DFold/weights/weights_v1.2.tgz}"
-RINALMO_WEIGHTS_URL="${RINALMO_WEIGHTS_URL:-https://zenodo.org/records/15043668/files/rinalmo_giga_pretrained.pt}"
-ESM2_WEIGHTS_URL="${ESM2_WEIGHTS_URL:-https://dl.fbaipublicfiles.com/fair-esm/models/esm2_t33_650M_UR50D.pt}"
-ESM2_CONTACT_REGRESSION_URL="${ESM2_CONTACT_REGRESSION_URL:-https://dl.fbaipublicfiles.com/fair-esm/regression/esm2_t33_650M_UR50D-contact-regression.pt}"
+ENV_MANAGER="${EM3DFOLD_ENV_MANAGER:-conda}"
+ENV_NAME="${EM3DFOLD_ENV_NAME:-em3dfold}"
+ENV_PREFIX="${EM3DFOLD_ENV_PREFIX:-}"
 
 fail() {
   echo "$*" >&2
@@ -30,7 +29,15 @@ function require_cmd() {
 }
 
 function usage() {
-  echo "usage: bash scripts/download.sh [download_root]"
+  echo "usage: bash scripts/download.sh DOWNLOAD_ROOT [--source official|huanglab] [--debug]"
+  echo
+  echo "Download sources:"
+  echo "  official   Original upstream sources (default)"
+  echo "  huanglab   Huang Lab mirror for the three language-model weight files"
+  echo
+  echo "Options:"
+  echo "  --debug    Append .debug to each language-model weight URL"
+  echo "             (only valid with --source huanglab)"
   echo
   echo "Downloaded files will be saved under:"
   echo "  ${MODEL_WEIGHTS_DIR}"
@@ -47,6 +54,66 @@ if [[ $# -lt 1 || -z "${DOWNLOAD_ROOT}" ]]; then
   exit 1
 fi
 
+shift
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --source)
+      [[ $# -ge 2 && -n "$2" ]] || {
+        usage
+        fail "--source requires 'official' or 'huanglab'"
+      }
+      DOWNLOAD_SOURCE="$2"
+      shift 2
+      ;;
+    --debug)
+      DEBUG_DOWNLOAD=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      fail "Unknown argument '$1'"
+      ;;
+  esac
+done
+
+case "${DOWNLOAD_SOURCE}" in
+  official)
+    DEFAULT_RINALMO_WEIGHTS_URL="https://zenodo.org/records/15043668/files/rinalmo_giga_pretrained.pt"
+    DEFAULT_ESM2_WEIGHTS_URL="https://dl.fbaipublicfiles.com/fair-esm/models/esm2_t33_650M_UR50D.pt"
+    DEFAULT_ESM2_CONTACT_REGRESSION_URL="https://dl.fbaipublicfiles.com/fair-esm/regression/esm2_t33_650M_UR50D-contact-regression.pt"
+    ;;
+  huanglab)
+    HUANGLAB_LM_WEIGHTS_URL="http://huanglab.phys.hust.edu.cn/EM3DFold/lm_weights"
+    DEFAULT_RINALMO_WEIGHTS_URL="${HUANGLAB_LM_WEIGHTS_URL}/rinalmo_giga_pretrained.pt"
+    DEFAULT_ESM2_WEIGHTS_URL="${HUANGLAB_LM_WEIGHTS_URL}/esm2_t33_650M_UR50D.pt"
+    DEFAULT_ESM2_CONTACT_REGRESSION_URL="${HUANGLAB_LM_WEIGHTS_URL}/esm2_t33_650M_UR50D-contact-regression.pt"
+    ;;
+  *)
+    usage
+    fail "Unknown download source '${DOWNLOAD_SOURCE}'. Expected 'official' or 'huanglab'."
+    ;;
+esac
+
+if [[ "${DEBUG_DOWNLOAD}" == true && "${DOWNLOAD_SOURCE}" != "huanglab" ]]; then
+  fail "--debug can only be used with '--source huanglab'"
+fi
+
+# Override these variables if a hosted weight file uses a different path.
+EM3DFOLD_WEIGHTS_URL="${EM3DFOLD_WEIGHTS_URL:-http://huanglab.phys.hust.edu.cn/EM3DFold/weights/weights_v1.2.tgz}"
+RINALMO_WEIGHTS_URL="${RINALMO_WEIGHTS_URL:-${DEFAULT_RINALMO_WEIGHTS_URL}}"
+ESM2_WEIGHTS_URL="${ESM2_WEIGHTS_URL:-${DEFAULT_ESM2_WEIGHTS_URL}}"
+ESM2_CONTACT_REGRESSION_URL="${ESM2_CONTACT_REGRESSION_URL:-${DEFAULT_ESM2_CONTACT_REGRESSION_URL}}"
+
+if [[ "${DEBUG_DOWNLOAD}" == true ]]; then
+  RINALMO_WEIGHTS_URL="${RINALMO_WEIGHTS_URL}.debug"
+  ESM2_WEIGHTS_URL="${ESM2_WEIGHTS_URL}.debug"
+  ESM2_CONTACT_REGRESSION_URL="${ESM2_CONTACT_REGRESSION_URL}.debug"
+fi
+
 echo "Checking required commands"
 require_cmd wget
 require_cmd tar
@@ -58,6 +125,11 @@ LM_WEIGHTS_DIR="${DOWNLOAD_ROOT}/lm_weights"
 
 mkdir -p "${MODEL_WEIGHTS_DIR}"
 mkdir -p "${LM_WEIGHTS_DIR}"
+
+echo "Download source: ${DOWNLOAD_SOURCE}"
+if [[ "${DEBUG_DOWNLOAD}" == true ]]; then
+  echo "Debug LM downloads: enabled (.debug URL suffix)"
+fi
 
 echo "1. Download EM3DFold pretrained weights"
 cd "${MODEL_WEIGHTS_DIR}"
@@ -81,15 +153,38 @@ echo "Done download"
 echo "EM3DFold model weights: ${MODEL_WEIGHTS_DIR}"
 echo "LM weights: ${LM_WEIGHTS_DIR}"
 
-if command -v conda >/dev/null 2>&1; then
-  echo "4. Set EM_WEIGHTS_DIR in conda env"
-  run_step "Failed to set EM_WEIGHTS_DIR in conda env 'em3dfold'" \
-    conda env config vars set "EM_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR}" -n em3dfold
-  echo "Set conda env var: EM_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR} in env 'em3dfold'"
-  echo "Re-activate the env for the change to take effect:"
-  echo "> conda deactivate && conda activate em3dfold"
+if [[ "${ENV_MANAGER}" == */* ]]; then
+  ENV_MANAGER_AVAILABLE=false
+  if [[ -x "${ENV_MANAGER}" ]]; then
+    ENV_MANAGER_AVAILABLE=true
+  fi
 else
-  echo "Skip setting EM_WEIGHTS_DIR: conda is not available in PATH"
+  ENV_MANAGER_AVAILABLE=false
+  if command -v "${ENV_MANAGER}" >/dev/null 2>&1; then
+    ENV_MANAGER="$(command -v "${ENV_MANAGER}")"
+    ENV_MANAGER_AVAILABLE=true
+  fi
+fi
+
+if [[ "${ENV_MANAGER_AVAILABLE}" == true ]]; then
+  if [[ -n "${ENV_PREFIX}" ]]; then
+    env_target=(--prefix "${ENV_PREFIX}")
+    target_description="prefix '${ENV_PREFIX}'"
+  else
+    env_target=(--name "${ENV_NAME}")
+    target_description="environment '${ENV_NAME}'"
+  fi
+  echo "4. Set EM_WEIGHTS_DIR in ${target_description}"
+  run_step "Failed to set EM_WEIGHTS_DIR in ${target_description}" \
+    "${ENV_MANAGER}" env config vars set "EM_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR}" "${env_target[@]}"
+  echo "Set environment variable: EM_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR} in ${target_description}"
+  echo "Re-activate the environment for the change to take effect."
+else
+  echo "Skip setting EM_WEIGHTS_DIR: '${ENV_MANAGER}' is not available"
   echo "Run manually later:"
-  echo "> conda env config vars set EM_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR} -n em3dfold"
+  if [[ -n "${ENV_PREFIX}" ]]; then
+    echo "> ${ENV_MANAGER} env config vars set EM_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR} --prefix ${ENV_PREFIX}"
+  else
+    echo "> ${ENV_MANAGER} env config vars set EM_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR} --name ${ENV_NAME}"
+  fi
 fi

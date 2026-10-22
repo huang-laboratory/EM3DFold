@@ -1,5 +1,7 @@
 # EM3DFold
 
+English | [zh-CN](README.zh-CN.md)
+
 <div align="center">
 <!--
 <img src="assets/logo.png" alt="EM3DFold: AI-driven Atomic Structure Modeling from Cryo-EM Maps" width="600" />
@@ -21,7 +23,7 @@ EM3DFold is a software package for automatic protein, RNA, and DNA structure mod
 **Platform**: Linux.
 
 > [!NOTE]
-> To use EM3DFold on Windows, you may install a Linux system via [Windows WSL](https://learn.microsoft.com/en-us/windows/wsl/install).
+> To use EM3DFold on Windows, you may install a Linux sub-system via [Windows WSL](https://learn.microsoft.com/en-us/windows/wsl/install).
 
 **GPU**: A GPU with at least 12 GB VRAM is required.
 
@@ -29,14 +31,19 @@ EM3DFold is a software package for automatic protein, RNA, and DNA structure mod
 
 **Disk Storage**: EM3DFold pretrained weights and language model weights require at least 6 GB free disk space.
 
+## Install with AI agents
+
+Give an AI coding agent terminal access and copy the prompt below, replacing paths when needed.
+
+```text
+1. (Optional) Check whether a working Miniconda3/conda installation is available; if not, first install a Miniconda version compatible with the current operating system and glibc.
+2. Install EM3DFold from https://github.com/huang-laboratory/EM3DFold and test one complete item.
+3. Create a new isolated environment with compatible Python package versions, without changing the system CUDA/driver or overwriting existing environments and results.
+4. Download the pretrained weights, verify imports, then run one README example and report commands, environments, runtime, peak GPU memory, and outputs.
+```
+
 ## Installation
-#### 1. Install conda
-
-We recommend using conda to manage the environment. If conda is not installed, please install Miniforge, Miniconda or Anaconda first.
-
-[Click here](https://docs.conda.io/en/latest/miniconda.html) to see guidance to install Miniconda.
-
-#### 2. Download EM3DFold
+#### 1. Download EM3DFold
 
 Download EM3DFold via `git` (recommended):
 ```bash
@@ -50,41 +57,78 @@ unzip main.zip
 cd EM3DFold-main
 ```
 
-#### 3. Create conda env and install dependencies
+> [!NOTE]
+> After downloading EM3DFold, choose one installation method: **Install with Conda** or **Install with Mamba**. You do not need to run both workflows.
 
-We write the tedious installation steps into one script, so installation is one command like:
-```bash
-# In the EM3DFold directory and have conda
-bash scripts/install.sh
-```
+#### 2A. Install with Conda
+
+Install [Miniconda](https://www.anaconda.com/docs/getting-started/miniconda/install/linux-install), Miniforge, or Anaconda first if `conda` is not available. Then, from the EM3DFold directory, create the `em3dfold` environment and install EM3DFold:
 
 > [!NOTE]
-> If you are familiar with conda/pip/shell or you encounter problems when running the above command, you could run commands in `install.sh` step-by-step.
-
-#### 4. Download pretrained weights
-
-The provided `download.sh` script automatically downloads the pretrained weights of EM3DFold and the required language models into the specified directory:
+> The linked Miniconda page installs the latest version by default, and the latest Linux installers require `glibc >= 2.28`. Some older systems, such as CentOS 7, normally provide only `glibc 2.17`. On these systems, consider using an older installer from the [Miniconda installer archive](https://repo.anaconda.com/miniconda/). We successfully tested [Miniconda3-py310_24.11.1-0-Linux-x86_64.sh](https://repo.anaconda.com/miniconda/Miniconda3-py310_24.11.1-0-Linux-x86_64.sh) on CentOS 7 as one compatible option.
 
 ```bash
-# Download all weights and set env var `EM_WEIGHTS_DIR`
-# Replace /path/to/save/pretrained/weights/ to the actual path
+bash scripts/install.sh
 conda activate em3dfold
+```
+
+Download all pretrained weights and save their location in the Conda environment:
+
+```bash
+# Replace this path with your desired weights directory.
 bash scripts/download.sh /path/to/save/pretrained/weights/
 
-# After downloading, the conda env needs to be refreshed
+# Reload the environment so EM_WEIGHTS_DIR becomes available.
 conda deactivate
 conda activate em3dfold
+echo "$EM_WEIGHTS_DIR"
+em3dfold --help
+```
 
-# Check if `EM_WEIGHTS_DIR` is successfully set
-echo $EM_WEIGHTS_DIR
+#### 2B. Install with Mamba
+
+Install [Mamba](https://mamba.readthedocs.io/en/latest/installation/mamba-installation.html) first if it is not available. Mamba uses the same `env.yml` as Conda and usually resolves the environment faster.
+
+If `mamba` is in `PATH`, run:
+
+```bash
+bash scripts/install_with_mamba.sh
+bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/
+mamba run -n em3dfold em3dfold --help
+```
+
+If Mamba is not in `PATH`, provide its absolute path consistently:
+
+```bash
+export MAMBA_EXE=/path/to/your/mamba
+bash scripts/install_with_mamba.sh
+bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/
+"$MAMBA_EXE" run -n em3dfold em3dfold --help
+```
+
+Both Mamba commands also accept an explicit environment prefix:
+
+```bash
+export EM3DFOLD_ENV_PREFIX=/path/to/environment
+bash scripts/install_with_mamba.sh
+bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/
+"${MAMBA_EXE:-mamba}" run --prefix "$EM3DFOLD_ENV_PREFIX" em3dfold --help
 ```
 
 > [!NOTE]
-> If downloading fails, download the weights manually. And if the script fails to set EM_WEIGHTS_DIR, run it manually:
+> By default, the download command uses the `official` sources (`Zenodo` and `fbaipublicfiles`), which may be slow in some regions. If downloads are too slow, try the `huanglab` source:
 > ```bash
-> # In EM3DFold env
+> bash scripts/download.sh /path/to/save/pretrained/weights/ --source huanglab
+> # Or, when using Mamba:
+> bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/ --source huanglab
+> ```
+
+> [!NOTE]
+> If you are familiar with Conda/Mamba/pip/shell or encounter problems with the scripts, you can run the commands in `install.sh` or `install_with_mamba.sh` step-by-step. If downloading fails, download the weights manually. If the script fails to set `EM_WEIGHTS_DIR`, set it manually:
+> ```bash
 > conda env config vars set EM_WEIGHTS_DIR=/path/to/save/pretrained/weights/ -n em3dfold
->```
+> mamba env config vars set EM_WEIGHTS_DIR=/path/to/save/pretrained/weights/ -n em3dfold
+> ```
 
 ## Update to latest version
 If you have already installed EM3DFold and want to get the latest version, run the following commands:
@@ -93,6 +137,11 @@ cd /path/to/EM3DFold/
 git pull
 conda activate em3dfold
 pip install .
+```
+
+With Mamba, the last two commands can instead be run without activation:
+```bash
+mamba run -n em3dfold python -m pip install .
 ```
 
 If `env.yml` and pretrained weights changed, we will add more guidance here.
@@ -154,9 +203,9 @@ em3dfold build --help
 <br>
 
 ```bash
-em3dfold build --map MAP.mrc \ 
-  --protein protein.fa \ 
-  --output out_protein \ 
+em3dfold build --map MAP.mrc \
+  --protein protein.fa \
+  --output out_protein \
   --device 0
 ```
 
@@ -194,9 +243,9 @@ em3dfold build --map emd_64369.map --protein 9UO1.fa -o 9UO1
 <br>
 
 ```bash
-em3dfold build --map MAP.mrc \ 
-  --rna rna.fa \ 
-  --output out_rna \ 
+em3dfold build --map MAP.mrc \
+  --rna rna.fa \
+  --output out_rna \
   --device 0
 ```
 
@@ -235,11 +284,11 @@ em3dfold build --map emd_41059.map --rna 8T5O.fa -o 8T5O
 <br>
 
 ```bash
-em3dfold build --map MAP.mrc \ 
-  --protein protein.fa \ 
-  --rna rna.fa \ 
+em3dfold build --map MAP.mrc \
+  --protein protein.fa \
+  --rna rna.fa \
   --dna dna.fa \
-  --output out_complex \ 
+  --output out_complex \
   --device 0
 ```
 
@@ -372,20 +421,61 @@ For proteins, we identified 2 protein sequences as candidates: `Q08J23` and `P14
 
 
 ## Trouble shooting
-- **No module named "xxx"**: package `xxx` is missing in your current environment. Install it with `pip install xxx` or `conda install xxx`.
+<details>
+<summary><code>No module named "xxx"</code></summary>
+<br>
 
-- **em3dfold: command not found**: you are probably not in the correct environment, activate EM3DFold environment and run again.
+Package `xxx` is missing in your current environment. Install it with `pip install xxx`, `conda install xxx`, or `mamba install xxx`.
 
-- **CUDA / PyTorch related errors**: check whether your installed `torch` matches the local CUDA runtime and GPU driver.
+</details>
 
-- **GLIBCXX / CXXABI errors**: this usually means the runtime `libstdc++` in your current environment is older than the one required. A common fix is to add the EM3DFold conda environment `lib/` directory to `$LD_LIBRARY_PATH`:
-  ```bash
-  export LD_LIBRARY_PATH=/path/to/conda/env/em3dfold/lib:$LD_LIBRARY_PATH
-  ```
-  When the `em3dfold` environment is activated, you can find `/path/to/conda/env/em3dfold/` with:
-  ```bash
-  echo $CONDA_PREFIX
-  ```
+<details>
+<summary>Dependency resolution issues with Conda/Mamba</summary>
+<br>
+
+If Conda or Mamba cannot resolve and install all dependencies in [`env.yml`](env.yml) together, try the following approaches in order:
+
+1. **Install in stages to identify the conflict.** Create a fresh `em3dfold` environment and install the Python version specified in `env.yml`, then install the Conda dependencies before the pip dependencies. If the Conda dependencies still cannot be resolved together, install them in smaller groups or one at a time to identify the package causing the conflict. Do not continue using an environment left by a failed dependency resolution.
+
+2. **Make the smallest necessary version adjustment.** Use the Conda/Mamba error message to identify the conflicting package, change only that package, and prefer the closest compatible version to the one specified by the project. For example, `env.yml` pins `pillow==10.0.1`, which installs successfully in our tested environment; if a solver cannot install it, first check the configured channels and channel priorities, operating system and CPU architecture, and whether the local package metadata is stale before changing the Pillow version.
+
+After modifying any dependency version, record all changes and run `pip check`, import the key packages, and run `em3dfold --help` to confirm that the environment remains usable. If the problem persists, please open an issue and include your operating system and CPU architecture, Conda/Mamba version, configured channels, exact installation command, complete dependency resolution error message, and all dependency changes.
+
+</details>
+
+<details>
+<summary><code>em3dfold: command not found</code></summary>
+<br>
+
+You are probably not in the correct environment. Activate the EM3DFold environment and run again.
+
+</details>
+
+<details>
+<summary>CUDA or PyTorch errors</summary>
+<br>
+
+Check whether your installed `torch` matches the local CUDA runtime and GPU driver.
+
+</details>
+
+<details>
+<summary>GLIBCXX or CXXABI errors</summary>
+<br>
+
+This usually means the runtime `libstdc++` in your current environment is older than the one required. A common fix is to add the EM3DFold environment `lib/` directory to `$LD_LIBRARY_PATH`:
+
+```bash
+export LD_LIBRARY_PATH=/path/to/em3dfold/environment/lib:$LD_LIBRARY_PATH
+```
+
+When the `em3dfold` environment is activated, you can find its prefix with:
+
+```bash
+echo $CONDA_PREFIX
+```
+
+</details>
 
 ## Citation
 If you find EM3DFold useful, please cite the following papers.
