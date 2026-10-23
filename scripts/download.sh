@@ -4,17 +4,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOWNLOAD_ROOT="${1:-}"
+DOWNLOAD_SOURCE="official"
+DEBUG_DOWNLOAD=false
 MODEL_WEIGHTS_DIR="${DOWNLOAD_ROOT}/weights"
 LM_WEIGHTS_DIR="${DOWNLOAD_ROOT}/lm_weights"
 ENV_MANAGER="${EM3DFOLD_ENV_MANAGER:-conda}"
 ENV_NAME="${EM3DFOLD_ENV_NAME:-em3dfold}"
 ENV_PREFIX="${EM3DFOLD_ENV_PREFIX:-}"
-
-# Override EM3DFOLD_WEIGHTS_URL if your hosted EM3DFold weights tarball uses a different path.
-EM3DFOLD_WEIGHTS_URL="${EM3DFOLD_WEIGHTS_URL:-http://huanglab.phys.hust.edu.cn/EM3DFold/weights/weights_v1.2.tgz}"
-RINALMO_WEIGHTS_URL="${RINALMO_WEIGHTS_URL:-https://zenodo.org/records/15043668/files/rinalmo_giga_pretrained.pt}"
-ESM2_WEIGHTS_URL="${ESM2_WEIGHTS_URL:-https://dl.fbaipublicfiles.com/fair-esm/models/esm2_t33_650M_UR50D.pt}"
-ESM2_CONTACT_REGRESSION_URL="${ESM2_CONTACT_REGRESSION_URL:-https://dl.fbaipublicfiles.com/fair-esm/regression/esm2_t33_650M_UR50D-contact-regression.pt}"
 
 fail() {
   echo "$*" >&2
@@ -33,7 +29,15 @@ function require_cmd() {
 }
 
 function usage() {
-  echo "usage: bash scripts/download.sh [download_root]"
+  echo "usage: bash scripts/download.sh DOWNLOAD_ROOT [--source official|huanglab] [--debug]"
+  echo
+  echo "Download sources:"
+  echo "  official   Original upstream sources (default)"
+  echo "  huanglab   Huang Lab mirror for the three language-model weight files"
+  echo
+  echo "Options:"
+  echo "  --debug    Append .debug to each language-model weight URL"
+  echo "             (only valid with --source huanglab)"
   echo
   echo "Downloaded files will be saved under:"
   echo "  ${MODEL_WEIGHTS_DIR}"
@@ -50,6 +54,66 @@ if [[ $# -lt 1 || -z "${DOWNLOAD_ROOT}" ]]; then
   exit 1
 fi
 
+shift
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --source)
+      [[ $# -ge 2 && -n "$2" ]] || {
+        usage
+        fail "--source requires 'official' or 'huanglab'"
+      }
+      DOWNLOAD_SOURCE="$2"
+      shift 2
+      ;;
+    --debug)
+      DEBUG_DOWNLOAD=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      fail "Unknown argument '$1'"
+      ;;
+  esac
+done
+
+case "${DOWNLOAD_SOURCE}" in
+  official)
+    DEFAULT_RINALMO_WEIGHTS_URL="https://zenodo.org/records/15043668/files/rinalmo_giga_pretrained.pt"
+    DEFAULT_ESM2_WEIGHTS_URL="https://dl.fbaipublicfiles.com/fair-esm/models/esm2_t33_650M_UR50D.pt"
+    DEFAULT_ESM2_CONTACT_REGRESSION_URL="https://dl.fbaipublicfiles.com/fair-esm/regression/esm2_t33_650M_UR50D-contact-regression.pt"
+    ;;
+  huanglab)
+    HUANGLAB_LM_WEIGHTS_URL="http://huanglab.phys.hust.edu.cn/EM3DFold/lm_weights"
+    DEFAULT_RINALMO_WEIGHTS_URL="${HUANGLAB_LM_WEIGHTS_URL}/rinalmo_giga_pretrained.pt"
+    DEFAULT_ESM2_WEIGHTS_URL="${HUANGLAB_LM_WEIGHTS_URL}/esm2_t33_650M_UR50D.pt"
+    DEFAULT_ESM2_CONTACT_REGRESSION_URL="${HUANGLAB_LM_WEIGHTS_URL}/esm2_t33_650M_UR50D-contact-regression.pt"
+    ;;
+  *)
+    usage
+    fail "Unknown download source '${DOWNLOAD_SOURCE}'. Expected 'official' or 'huanglab'."
+    ;;
+esac
+
+if [[ "${DEBUG_DOWNLOAD}" == true && "${DOWNLOAD_SOURCE}" != "huanglab" ]]; then
+  fail "--debug can only be used with '--source huanglab'"
+fi
+
+# Override these variables if a hosted weight file uses a different path.
+EM3DFOLD_WEIGHTS_URL="${EM3DFOLD_WEIGHTS_URL:-http://huanglab.phys.hust.edu.cn/EM3DFold/weights/weights_v1.2.tgz}"
+RINALMO_WEIGHTS_URL="${RINALMO_WEIGHTS_URL:-${DEFAULT_RINALMO_WEIGHTS_URL}}"
+ESM2_WEIGHTS_URL="${ESM2_WEIGHTS_URL:-${DEFAULT_ESM2_WEIGHTS_URL}}"
+ESM2_CONTACT_REGRESSION_URL="${ESM2_CONTACT_REGRESSION_URL:-${DEFAULT_ESM2_CONTACT_REGRESSION_URL}}"
+
+if [[ "${DEBUG_DOWNLOAD}" == true ]]; then
+  RINALMO_WEIGHTS_URL="${RINALMO_WEIGHTS_URL}.debug"
+  ESM2_WEIGHTS_URL="${ESM2_WEIGHTS_URL}.debug"
+  ESM2_CONTACT_REGRESSION_URL="${ESM2_CONTACT_REGRESSION_URL}.debug"
+fi
+
 echo "Checking required commands"
 require_cmd wget
 require_cmd tar
@@ -61,6 +125,11 @@ LM_WEIGHTS_DIR="${DOWNLOAD_ROOT}/lm_weights"
 
 mkdir -p "${MODEL_WEIGHTS_DIR}"
 mkdir -p "${LM_WEIGHTS_DIR}"
+
+echo "Download source: ${DOWNLOAD_SOURCE}"
+if [[ "${DEBUG_DOWNLOAD}" == true ]]; then
+  echo "Debug LM downloads: enabled (.debug URL suffix)"
+fi
 
 echo "1. Download EM3DFold pretrained weights"
 cd "${MODEL_WEIGHTS_DIR}"

@@ -36,9 +36,10 @@ EM3DFold is a software package for automatic protein, RNA, and DNA structure mod
 Give an AI coding agent terminal access and copy the prompt below, replacing paths when needed.
 
 ```text
-1. Install EM3DFold from https://github.com/huang-laboratory/EM3DFold and test one complete item.
-2. Create a new isolated environment with compatible Python package versions, without changing the system CUDA/driver or overwriting existing environments and results.
-3. Download the pretrained weights, verify imports, then run one README example and report commands, environments, runtime, peak GPU memory, and outputs.
+1. (Optional) Check whether a working Miniconda3/conda installation is available; if not, first install a Miniconda version compatible with the current operating system and glibc.
+2. Install EM3DFold from https://github.com/huang-laboratory/EM3DFold and test one complete item.
+3. Create a new isolated environment with compatible Python package versions, without changing the system CUDA/driver or overwriting existing environments and results.
+4. Download the pretrained weights, verify imports, then run one README example and report commands, environments, runtime, peak GPU memory, and outputs.
 ```
 
 ## Installation
@@ -61,7 +62,10 @@ cd EM3DFold-main
 
 #### 2A. Install with Conda
 
-Install [Miniconda](https://docs.conda.io/en/latest/miniconda.html), Miniforge, or Anaconda first if `conda` is not available. Then, from the EM3DFold directory, create the `em3dfold` environment and install EM3DFold:
+Install [Miniconda](https://www.anaconda.com/docs/getting-started/miniconda/install/linux-install), Miniforge, or Anaconda first if `conda` is not available. Then, from the EM3DFold directory, create the `em3dfold` environment and install EM3DFold:
+
+> [!NOTE]
+> The linked Miniconda page installs the latest version by default, and the latest Linux installers require `glibc >= 2.28`. Some older systems, such as CentOS 7, normally provide only `glibc 2.17`. On these systems, consider using an older installer from the [Miniconda installer archive](https://repo.anaconda.com/miniconda/). We successfully tested [Miniconda3-py310_24.11.1-0-Linux-x86_64.sh](https://repo.anaconda.com/miniconda/Miniconda3-py310_24.11.1-0-Linux-x86_64.sh) on CentOS 7 as one compatible option.
 
 ```bash
 bash scripts/install.sh
@@ -110,6 +114,14 @@ bash scripts/install_with_mamba.sh
 bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/
 "${MAMBA_EXE:-mamba}" run --prefix "$EM3DFOLD_ENV_PREFIX" em3dfold --help
 ```
+
+> [!NOTE]
+> By default, the download command uses the `official` sources (`Zenodo` and `fbaipublicfiles`), which may be slow in some regions. If downloads are too slow, try the `huanglab` source:
+> ```bash
+> bash scripts/download.sh /path/to/save/pretrained/weights/ --source huanglab
+> # Or, when using Mamba:
+> bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/ --source huanglab
+> ```
 
 > [!NOTE]
 > If you are familiar with Conda/Mamba/pip/shell or encounter problems with the scripts, you can run the commands in `install.sh` or `install_with_mamba.sh` step-by-step. If downloading fails, download the weights manually. If the script fails to set `EM_WEIGHTS_DIR`, set it manually:
