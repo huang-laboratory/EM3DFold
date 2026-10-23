@@ -52,6 +52,8 @@ lm_weights/
 em3dfold/weights/
 em3dfold/lm_weights/
 flash_attn_whl/*.whl
+flash_attn_whl/*.whl.part
+flash_attn_whl/*.corrupt.*
 
 # Future monorepo package-local caches
 pkgs/*/.test-cache/

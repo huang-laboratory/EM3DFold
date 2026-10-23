@@ -31,7 +31,7 @@ EM3DFold 是一款从冷冻电镜密度图中自动构建蛋白质、RNA 和 DNA
 
 **CUDA**：需要 CUDA >= 11.8。
 
-**磁盘空间**：EM3DFold 预训练权重和序列语言模型权重至少需要 6 GB 可用磁盘空间。
+**磁盘空间**：安装 EM3DFold 并下载全部预训练权重至少需要 10 GB 可用磁盘空间。
 
 ## 使用 AI Agent 安装
 
@@ -130,7 +130,10 @@ bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/
 > ```
 
 > [!NOTE]
-> 如果你熟悉 Conda/Mamba/pip/shell，或者运行脚本时遇到问题，可以逐步执行 `install.sh` 或 `install_with_mamba.sh` 中的命令。如果下载失败，请手动下载权重。如果脚本没有成功设置 `EM_WEIGHTS_DIR`，请手动设置：
+> 安装和权重下载命令支持重复执行。如果命令被取消、中断或执行失败，请重新运行同一条命令继续安装或下载。脚本会更新已有环境、跳过校验通过的下载，并自动续传未完成的 `.part` 文件。所有权重文件在使用前都会通过 SHA-256 校验。
+
+> [!NOTE]
+> 如果你熟悉 Conda/Mamba/pip/shell，或者希望逐条命令执行安装，可以参照 [`install_commands.md`](install_commands.md) 中完整的 Conda 和 Mamba 首次安装命令。如果下载失败，请手动下载权重。如果脚本没有成功设置 `EM_WEIGHTS_DIR`，请手动设置：
 > ```bash
 > conda env config vars set EM_WEIGHTS_DIR=/path/to/save/pretrained/weights/ -n em3dfold
 > mamba env config vars set EM_WEIGHTS_DIR=/path/to/save/pretrained/weights/ -n em3dfold

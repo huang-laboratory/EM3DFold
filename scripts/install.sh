@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_NAME="em3dfold"
+
 fail() {
   echo "$*" >&2
   exit 1
@@ -25,25 +28,31 @@ fi
 require_cmd conda
 eval "$(conda shell.bash hook)"
 
-echo "1 Create conda env"
-run_step "Failed at step 1, unable to create conda env" \
-  conda env create -f env.yml
+if conda env list | awk -v name="${ENV_NAME}" '$1 == name { found = 1 } END { exit !found }'; then
+  echo "1 Update existing conda environment ${ENV_NAME}"
+  run_step "Failed at step 1, unable to update conda environment ${ENV_NAME}" \
+    conda env update --name "${ENV_NAME}" --file "${ROOT_DIR}/env.yml"
+else
+  echo "1 Create conda environment ${ENV_NAME}"
+  run_step "Failed at step 1, unable to create conda environment ${ENV_NAME}" \
+    conda env create --name "${ENV_NAME}" --file "${ROOT_DIR}/env.yml"
+fi
 
 echo "2 Activate env"
 run_step "Failed at step 2, unable to activate em3dfold env" \
-  conda activate em3dfold
+  conda activate "${ENV_NAME}"
 
 echo "3 Install flash attention"
 run_step "Failed at step 3, unable to install flash attention" \
-  bash -c "cd flash_attn_whl && bash install_flash_attn.sh"
+  bash "${ROOT_DIR}/flash_attn_whl/install_flash_attn.sh"
 echo "Done install base env"
 
 echo "4 Install EM3DFold"
 run_step "Failed at step 4, unable to install EM3DFold" \
-  pip install .
+  python -m pip install "${ROOT_DIR}"
 echo "Done install EM3DFold"
 
 # Check installation
 run_step "Failed at step 5, em3dfold --help did not run successfully" \
-  em3dfold --help
+  python -m em3dfold --help
 echo "Done check installation"
