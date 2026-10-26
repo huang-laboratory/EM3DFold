@@ -91,6 +91,9 @@ echo "$EM_WEIGHTS_DIR"
 em3dfold --help
 ```
 
+> [!NOTE]
+> 安装和权重下载命令支持重复执行。如果命令被取消、中断或执行失败，请重新运行同一条命令继续安装或下载。脚本会更新已有环境、跳过校验通过的下载，并自动续传未完成的 `.part` 文件。所有权重文件在使用前都会通过 SHA-256 校验。
+
 #### 2B. 使用 Mamba 安装
 
 如果系统中没有 Mamba，请先[安装 Mamba](https://mamba.readthedocs.io/en/latest/installation/mamba-installation.html)。Mamba 使用与 Conda 相同的 `env.yml`，通常可以更快地解析环境依赖。
@@ -128,9 +131,6 @@ bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/
 > # 使用 Mamba 时：
 > bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/ --source huanglab
 > ```
-
-> [!NOTE]
-> 安装和权重下载命令支持重复执行。如果命令被取消、中断或执行失败，请重新运行同一条命令继续安装或下载。脚本会更新已有环境、跳过校验通过的下载，并自动续传未完成的 `.part` 文件。所有权重文件在使用前都会通过 SHA-256 校验。
 
 > [!NOTE]
 > 如果你熟悉 Conda/Mamba/pip/shell，或者希望逐条命令执行安装，可以参照 [`install_commands.md`](install_commands.md) 中完整的 Conda 和 Mamba 首次安装命令。如果下载失败，请手动下载权重。如果脚本没有成功设置 `EM_WEIGHTS_DIR`，请手动设置：

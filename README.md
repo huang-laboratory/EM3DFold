@@ -85,6 +85,9 @@ echo "$EM_WEIGHTS_DIR"
 em3dfold --help
 ```
 
+> [!NOTE]
+> Installation and weight-download commands are safe to rerun. If a command is cancelled, interrupted, or fails, run the same command again to continue. An existing environment will be updated, verified downloads will be skipped, and incomplete `.part` downloads will resume automatically. Weight files are verified with SHA-256 before use.
+
 #### 2B. Install with Mamba
 
 Install [Mamba](https://mamba.readthedocs.io/en/latest/installation/mamba-installation.html) first if it is not available. Mamba uses the same `env.yml` as Conda and usually resolves the environment faster.
@@ -122,9 +125,6 @@ bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/
 > # Or, when using Mamba:
 > bash scripts/download_with_mamba.sh /path/to/save/pretrained/weights/ --source huanglab
 > ```
-
-> [!NOTE]
-> Installation and weight-download commands are safe to rerun. If a command is cancelled, interrupted, or fails, run the same command again to continue. An existing environment will be updated, verified downloads will be skipped, and incomplete `.part` downloads will resume automatically. Weight files are verified with SHA-256 before use.
 
 > [!NOTE]
 > If you are familiar with Conda/Mamba/pip/shell or prefer to run the installation one command at a time, see [`install_commands.md`](install_commands.md) for the complete first-time Conda and Mamba installation commands. If downloading fails, download the weights manually. If the script fails to set `EM_WEIGHTS_DIR`, set it manually:
