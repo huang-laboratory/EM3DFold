@@ -5,6 +5,11 @@ Tao Li et al.
 
 from pathlib import Path
 
+from em3dfold.utils.cpu_utils import (
+    configure_cpu_resources,
+    configure_loaded_thread_pools,
+)
+
 
 def _resolve_runtime_log_dir(args):
     for attr_name in ("output", "output_dir", "out_dir"):
@@ -26,9 +31,16 @@ def main():
     import time
     import platform
     import importlib
+    import logging
     import sys
     import em3dfold
     from em3dfold.utils.log_utils import configure_runtime_logging
+
+    cpu_config = None
+    if not any(flag in sys.argv[1:] for flag in ("-h", "--help", "--version")):
+        # This must run before importing the selected command, because those
+        # modules import NumPy, PyTorch, OpenBLAS, and Numba.
+        cpu_config = configure_cpu_resources()
 
     # Check platform
     if platform.system() != "Linux":
@@ -71,6 +83,8 @@ def main():
         if key == selected_module_key:
             try:
                 module = importlib.import_module(module_path)
+                if cpu_config is not None:
+                    configure_loaded_thread_pools(cpu_config.max_threads)
             except Exception as exc:
                 module_error = exc
 
@@ -166,6 +180,13 @@ def main():
                 "em3dfit.utils",
             ),
         )
+        if cpu_config is not None:
+            logging.getLogger("em3dfold.runtime").info(
+                "CPU thread limit = %d; affinity CPUs = %s (previously %d CPUs)",
+                cpu_config.max_threads,
+                ",".join(str(cpu) for cpu in cpu_config.affinity_after),
+                len(cpu_config.affinity_before),
+            )
     args.func(args)
 
 if __name__ == '__main__':
