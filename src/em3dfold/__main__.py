@@ -36,8 +36,12 @@ def main():
     import em3dfold
     from em3dfold.utils.log_utils import configure_runtime_logging
 
+    selected_module_key = sys.argv[1] if len(sys.argv) > 1 else None
     cpu_config = None
-    if not any(flag in sys.argv[1:] for flag in ("-h", "--help", "--version")):
+    if (
+        selected_module_key in {"build", "build_no_seq"}
+        and not any(flag in sys.argv[1:] for flag in ("-h", "--help", "--version"))
+    ):
         # This must run before importing the selected command, because those
         # modules import NumPy, PyTorch, OpenBLAS, and Numba.
         cpu_config = configure_cpu_resources()
@@ -72,8 +76,6 @@ def main():
         "hmm_search": "em3dfold.hmm_search",
         #"assemble": "em3dfold.pipeline.assemble",
     }
-    selected_module_key = sys.argv[1] if len(sys.argv) > 1 else None
-
     subparsers = parser.add_subparsers(title="Choose a module",)
     subparsers.required = "True"
 
