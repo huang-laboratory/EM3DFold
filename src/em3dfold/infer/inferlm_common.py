@@ -108,6 +108,30 @@ def prepare_common_args(parser):
         default=3,
         help="Minimum NA backbone-chain length kept in final outputs",
     )
+    parser.set_defaults(prune_low_confidence_short_protein_chains=True)
+    parser.add_argument(
+        "--prune-low-confidence-short-protein-chains",
+        dest="prune_low_confidence_short_protein_chains",
+        action="store_true",
+        help=(
+            "In every Stage-2 recycle, compute confidence-aware pruning "
+            "for protein chains of length <=5 (default: enabled)"
+        ),
+    )
+    parser.add_argument(
+        "--no-prune-low-confidence-short-protein-chains",
+        dest="prune_low_confidence_short_protein_chains",
+        action="store_false",
+        help="Disable confidence-aware final pruning of short protein chains",
+    )
+    parser.add_argument(
+        "--use-final-pruned-structure",
+        action="store_true",
+        help=(
+            "Use the confidence-pruned structure for top-level output.cif; "
+            "by default output.cif remains the structure before final pruning"
+        ),
+    )
     parser.set_defaults(fallback_to_predicted_na_types=True)
     parser.add_argument(
         "--no-fallback-to-predicted-na-types",
@@ -637,6 +661,9 @@ def run_inference_loop(args, model_class, model_args, run_inference_fn):
         na_aa_logits_data=postprocess_na_aa_logits_data,
         force_protein_mode=getattr(args, "force_protein_mode", False),
         force_na_mode=getattr(args, "force_na_mode", False),
+        prune_low_confidence_short_protein_chains=getattr(
+            args, "prune_low_confidence_short_protein_chains", True
+        ),
     )
     if getattr(args, "extra_protein_trace_backend", "none") == "beam":
         beam_output_info = final_results_align_to_sequence_beam_protein(
@@ -695,17 +722,36 @@ def run_main(args, model_class, model_args, run_inference_fn):
 
     output_dir = args.output_dir
     n_round_refine = max(args.recycle, 1)
+    final_short_chain_pruning_enabled = getattr(
+        args, "prune_low_confidence_short_protein_chains", True
+    )
+    use_final_pruned_structure = getattr(args, "use_final_pruned_structure", False)
+    if use_final_pruned_structure and not final_short_chain_pruning_enabled:
+        raise ValueError(
+            "--use-final-pruned-structure requires confidence-aware short-chain "
+            "pruning; remove --no-prune-low-confidence-short-protein-chains"
+        )
     best_so_far_protein_path = None
     best_so_far_protein_entropy_path = None
     best_so_far_protein_num_res = -1
+    best_so_far_final_prune_path = None
+    best_so_far_final_prune_entropy_path = None
+    best_so_far_final_prune_num_res = -1
     last_protein_after_prune_path = None
     last_protein_entropy_path = None
     last_protein_after_num_res = -1
     last_na_after_prune_path = None
     last_na_entropy_path = None
+    last_protein_after_final_prune_path = None
+    last_protein_after_final_prune_entropy_path = None
+    last_protein_after_final_prune_num_res = -1
+    protein_selection_candidates = []
 
     for i in range(n_round_refine):
         args.no_use_random_affine = i != 0
+        args.prune_low_confidence_short_protein_chains = bool(
+            final_short_chain_pruning_enabled
+        )
         if i == n_round_refine - 1:
             args.prune = True
             args.protein_radius_threshold = 1.50
@@ -720,8 +766,28 @@ def run_main(args, model_class, model_args, run_inference_fn):
         output_info = run_inference_loop(args, model_class, model_args, run_inference_fn)
         clear_cuda_cache(args.device, note=f"inferlm recycle {i + 1}")
 
+        if final_short_chain_pruning_enabled:
+            last_protein_after_final_prune_path = output_info.get(
+                "protein_after_final_prune_path"
+            )
+            last_protein_after_final_prune_entropy_path = output_info.get(
+                "after_final_prune_entropy_score_path"
+            )
+            last_protein_after_final_prune_num_res = int(
+                output_info.get("protein_after_final_prune_num_res", 0) or 0
+            )
+
         protein_after_path = output_info.get("protein_after_prune_path")
         protein_after_num_res = int(output_info.get("protein_after_num_res", 0) or 0)
+        protein_after_final_prune_path = output_info.get(
+            "protein_after_final_prune_path"
+        )
+        protein_after_final_prune_num_res = int(
+            output_info.get("protein_after_final_prune_num_res", 0) or 0
+        )
+        protein_after_final_prune_entropy_path = output_info.get(
+            "after_final_prune_entropy_score_path"
+        )
         entropy_output_path = output_info.get("output_entropy_score_path")
         protein_entropy_output_path = (
             entropy_output_path
@@ -732,6 +798,35 @@ def run_main(args, model_class, model_args, run_inference_fn):
             last_protein_after_prune_path = protein_after_path
             last_protein_entropy_path = protein_entropy_output_path
             last_protein_after_num_res = protein_after_num_res
+            if i >= 2:
+                protein_selection_candidates.append(
+                    {
+                        "recycle": i,
+                        "path": protein_after_path,
+                        "entropy_path": protein_entropy_output_path,
+                        "num_res": protein_after_num_res,
+                        "final_prune_path": protein_after_final_prune_path,
+                        "final_prune_entropy_path": (
+                            protein_after_final_prune_entropy_path
+                        ),
+                        "final_prune_num_res": protein_after_final_prune_num_res,
+                        "quality": float(
+                            output_info.get("protein_after_quality", 0.0) or 0.0
+                        ),
+                        "mean_confidence": float(
+                            output_info.get(
+                                "protein_after_mean_confidence", 0.0
+                            )
+                            or 0.0
+                        ),
+                        "mean_residue_type_confidence": float(
+                            output_info.get(
+                                "protein_after_mean_residue_type_confidence", 0.0
+                            )
+                            or 0.0
+                        ),
+                    }
+                )
         if i < 2 and protein_after_path is not None:
             print(
                 "# Skip best_so_far_protein update at recycle_{}; only consider rounds with index >= 2".format(
@@ -742,6 +837,11 @@ def run_main(args, model_class, model_args, run_inference_fn):
             best_so_far_protein_path = protein_after_path
             best_so_far_protein_entropy_path = protein_entropy_output_path
             best_so_far_protein_num_res = protein_after_num_res
+            best_so_far_final_prune_path = protein_after_final_prune_path
+            best_so_far_final_prune_entropy_path = (
+                protein_after_final_prune_entropy_path
+            )
+            best_so_far_final_prune_num_res = protein_after_final_prune_num_res
             print(
                 "# Update best_so_far_protein: residues={} path={}".format(
                     best_so_far_protein_num_res,
@@ -787,10 +887,58 @@ def run_main(args, model_class, model_args, run_inference_fn):
     selected_protein_path = best_so_far_protein_path
     selected_protein_entropy_path = best_so_far_protein_entropy_path
     selected_protein_num_res = best_so_far_protein_num_res
+    selected_final_prune_path = best_so_far_final_prune_path
+    selected_final_prune_entropy_path = best_so_far_final_prune_entropy_path
+    selected_final_prune_num_res = best_so_far_final_prune_num_res
+    recycle_selection_mode = os.environ.get(
+        "EM3DFOLD_RECYCLE_SELECTION", "confidence"
+    ).strip().lower()
+    if recycle_selection_mode == "confidence" and protein_selection_candidates:
+        max_num_res = max(candidate["num_res"] for candidate in protein_selection_candidates)
+        try:
+            min_residue_ratio = float(
+                os.environ.get("EM3DFOLD_RECYCLE_MIN_RESIDUE_RATIO", "0.95")
+            )
+        except ValueError:
+            min_residue_ratio = 0.95
+        eligible_candidates = [
+            candidate
+            for candidate in protein_selection_candidates
+            if candidate["num_res"] >= min_residue_ratio * max_num_res
+        ]
+        selected_candidate = max(
+            eligible_candidates,
+            key=lambda candidate: (candidate["quality"], candidate["num_res"]),
+        )
+        selected_protein_path = selected_candidate["path"]
+        selected_protein_entropy_path = selected_candidate["entropy_path"]
+        selected_protein_num_res = selected_candidate["num_res"]
+        selected_final_prune_path = selected_candidate["final_prune_path"]
+        selected_final_prune_entropy_path = selected_candidate[
+            "final_prune_entropy_path"
+        ]
+        selected_final_prune_num_res = selected_candidate["final_prune_num_res"]
+        print(
+            "# Confidence-aware recycle selection: recycle={} residues={} quality={:.4f} "
+            "mean_confidence={:.4f} mean_residue_type_confidence={:.4f} "
+            "min_residue_ratio={:.3f}".format(
+                selected_candidate["recycle"],
+                selected_candidate["num_res"],
+                selected_candidate["quality"],
+                selected_candidate["mean_confidence"],
+                selected_candidate["mean_residue_type_confidence"],
+                min_residue_ratio,
+            )
+        )
     if selected_protein_path is None and last_protein_after_prune_path is not None:
         selected_protein_path = last_protein_after_prune_path
         selected_protein_entropy_path = last_protein_entropy_path
         selected_protein_num_res = last_protein_after_num_res
+        selected_final_prune_path = last_protein_after_final_prune_path
+        selected_final_prune_entropy_path = (
+            last_protein_after_final_prune_entropy_path
+        )
+        selected_final_prune_num_res = last_protein_after_final_prune_num_res
         print(
             "# Use fallback protein source from last recycle: residues={} path={}".format(
                 selected_protein_num_res,
@@ -798,19 +946,91 @@ def run_main(args, model_class, model_args, run_inference_fn):
             )
         )
 
+    if final_short_chain_pruning_enabled:
+        before_final_prune_output_path = os.path.join(
+            output_dir, "before_final_prune.cif"
+        )
+        before_final_prune_output_path = _write_merged_best_so_far_output(
+            before_final_prune_output_path,
+            protein_path=selected_protein_path,
+            na_path=last_na_after_prune_path,
+        )
+        after_final_prune_output_path = os.path.join(
+            output_dir, "after_final_prune.cif"
+        )
+        after_final_prune_output_path = _write_merged_best_so_far_output(
+            after_final_prune_output_path,
+            protein_path=selected_final_prune_path,
+            na_path=last_na_after_prune_path,
+        )
+        output_final_prune_path = os.path.join(
+            output_dir, "output_final_prune.cif"
+        )
+        output_final_prune_path = _write_merged_best_so_far_output(
+            output_final_prune_path,
+            protein_path=selected_final_prune_path,
+            na_path=last_na_after_prune_path,
+        )
+        output_final_prune_entropy_path = os.path.join(
+            output_dir, "output_final_prune_entropy_score.cif"
+        )
+        output_final_prune_entropy_path = _write_merged_best_so_far_output(
+            output_final_prune_entropy_path,
+            protein_path=selected_final_prune_entropy_path,
+            na_path=last_na_entropy_path,
+        )
+        if before_final_prune_output_path is not None:
+            print(
+                "# Selected-recycle structure before confidence pruning written to {}".format(
+                    before_final_prune_output_path
+                )
+            )
+        if after_final_prune_output_path is not None:
+            print(
+                "# Selected-recycle structure after confidence pruning written to {}".format(
+                    after_final_prune_output_path
+                )
+            )
+        if output_final_prune_path is not None:
+            print(
+                "# Selected-recycle final-pruned output written to {}".format(
+                    output_final_prune_path
+                )
+            )
+        if output_final_prune_entropy_path is not None:
+            print(
+                "# Selected-recycle final-pruned entropy output written to {}".format(
+                    output_final_prune_entropy_path
+                )
+            )
+
+    output_protein_path = selected_protein_path
+    output_protein_entropy_path = selected_protein_entropy_path
+    output_protein_num_res = selected_protein_num_res
+    if use_final_pruned_structure:
+        output_protein_path = selected_final_prune_path
+        output_protein_entropy_path = selected_final_prune_entropy_path
+        output_protein_num_res = selected_final_prune_num_res
+        print(
+            "# Top-level output.cif uses the confidence-pruned protein from the "
+            "selected recycle"
+        )
+    else:
+        print("# Top-level output.cif remains before final confidence pruning")
+
     final_output_path = os.path.join(output_dir, "output.cif")
     merged_output_path = _write_merged_best_so_far_output(
         final_output_path,
-        protein_path=selected_protein_path,
+        protein_path=output_protein_path,
         na_path=last_na_after_prune_path,
     )
     if merged_output_path is not None:
         print(f"# Final merged output written to {merged_output_path}")
-        if selected_protein_path is not None:
+        if output_protein_path is not None:
             print(
                 "# Final protein source = {} ({} residues)".format(
-                    selected_protein_path,
-                    selected_protein_num_res,
+                    output_protein_path,
+                    output_protein_num_res,
                 )
             )
         if last_na_after_prune_path is not None:
@@ -818,7 +1038,7 @@ def run_main(args, model_class, model_args, run_inference_fn):
 
     final_profile_dir = _write_final_chain_hmm_profiles(
         _resolve_chain_hmm_profile_dir(),
-        protein_path=selected_protein_path,
+        protein_path=output_protein_path,
         na_path=last_na_after_prune_path,
     )
     if final_profile_dir is not None:
@@ -827,15 +1047,14 @@ def run_main(args, model_class, model_args, run_inference_fn):
     final_entropy_output_path = os.path.join(output_dir, "output_entropy_score.cif")
     merged_entropy_output_path = _write_merged_best_so_far_output(
         final_entropy_output_path,
-        protein_path=selected_protein_entropy_path,
+        protein_path=output_protein_entropy_path,
         na_path=last_na_entropy_path,
     )
     if merged_entropy_output_path is not None:
         print(f"# Final entropy-score output written to {final_entropy_output_path}")
-        if selected_protein_entropy_path is not None:
-            print(f"# Final entropy protein source = {selected_protein_entropy_path}")
+        if output_protein_entropy_path is not None:
+            print(f"# Final entropy protein source = {output_protein_entropy_path}")
         if last_na_entropy_path is not None:
             print(f"# Final entropy NA source = {last_na_entropy_path}")
 
     print("# Done all rounds")
-

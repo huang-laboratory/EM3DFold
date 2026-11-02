@@ -63,9 +63,25 @@ else
   target_description="environment ${ENV_NAME}"
 fi
 
-echo "1 Create Mamba ${target_description}"
-run_step "Failed at step 1, unable to create ${target_description}" \
-  "${MAMBA_EXE}" env create --yes --file "${ROOT_DIR}/env.yml" "${create_target[@]}"
+if [[ -n "${ENV_PREFIX}" ]]; then
+  target_exists=false
+  [[ -d "${ENV_PREFIX}/conda-meta" ]] && target_exists=true
+else
+  target_exists=false
+  if "${MAMBA_EXE}" env list | awk -v name="${ENV_NAME}" '$1 == name { found = 1 } END { exit !found }'; then
+    target_exists=true
+  fi
+fi
+
+if [[ "${target_exists}" == true ]]; then
+  echo "1 Update existing Mamba ${target_description}"
+  run_step "Failed at step 1, unable to update ${target_description}" \
+    "${MAMBA_EXE}" env update --yes --file "${ROOT_DIR}/env.yml" "${create_target[@]}"
+else
+  echo "1 Create Mamba ${target_description}"
+  run_step "Failed at step 1, unable to create ${target_description}" \
+    "${MAMBA_EXE}" env create --yes --file "${ROOT_DIR}/env.yml" "${create_target[@]}"
+fi
 
 echo "2 Install flash attention"
 run_step "Failed at step 2, unable to install flash attention" \

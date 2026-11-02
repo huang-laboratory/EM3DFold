@@ -5,6 +5,11 @@ Tao Li et al.
 
 from pathlib import Path
 
+from em3dfold.utils.cpu_utils import (
+    configure_cpu_resources,
+    configure_loaded_thread_pools,
+)
+
 
 def _resolve_runtime_log_dir(args):
     for attr_name in ("output", "output_dir", "out_dir"):
@@ -26,8 +31,20 @@ def main():
     import time
     import platform
     import importlib
+    import logging
+    import sys
     import em3dfold
     from em3dfold.utils.log_utils import configure_runtime_logging
+
+    selected_module_key = sys.argv[1] if len(sys.argv) > 1 else None
+    cpu_config = None
+    if (
+        selected_module_key in {"build", "build_no_seq"}
+        and not any(flag in sys.argv[1:] for flag in ("-h", "--help", "--version"))
+    ):
+        # This must run before importing the selected command, because those
+        # modules import NumPy, PyTorch, OpenBLAS, and Numba.
+        cpu_config = configure_cpu_resources()
 
     # Check platform
     if platform.system() != "Linux":
@@ -59,21 +76,27 @@ def main():
         "hmm_search": "em3dfold.hmm_search",
         #"assemble": "em3dfold.pipeline.assemble",
     }
-
     subparsers = parser.add_subparsers(title="Choose a module",)
     subparsers.required = "True"
 
     for key, module_path in modules.items():
         module = None
         module_error = None
-        try:
-            module = importlib.import_module(module_path)
-        except Exception as exc:
-            module_error = exc
+        if key == selected_module_key:
+            try:
+                module = importlib.import_module(module_path)
+                if cpu_config is not None:
+                    configure_loaded_thread_pools(cpu_config.max_threads)
+            except Exception as exc:
+                module_error = exc
 
         module_parser = subparsers.add_parser(
             key,
-            description=(module.__doc__ if module is not None else f"Module {module_path} is currently unavailable."),
+            description=(
+                module.__doc__
+                if module is not None
+                else f"Run the {key} module."
+            ),
             formatter_class=argparse.RawTextHelpFormatter,
         )
         module_parser.add_argument(
@@ -81,6 +104,9 @@ def main():
             action="store_true",
             help="Also write full detailed logs to stdout; otherwise stdout shows only key stage messages.",
         )
+        if key != selected_module_key:
+            continue
+
         if module is not None:
             if hasattr(module, "add_args"):
                 module.add_args(module_parser)
@@ -156,8 +182,14 @@ def main():
                 "em3dfit.utils",
             ),
         )
+        if cpu_config is not None:
+            logging.getLogger("em3dfold.runtime").info(
+                "CPU thread limit = %d; affinity CPUs = %s (previously %d CPUs)",
+                cpu_config.max_threads,
+                ",".join(str(cpu) for cpu in cpu_config.affinity_after),
+                len(cpu_config.affinity_before),
+            )
     args.func(args)
 
 if __name__ == '__main__':
     main()
-
